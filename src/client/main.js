@@ -5,16 +5,31 @@ glov_local_storage.storage_prefix = 'ld46'; // Before requiring anything else th
 const assert = require('assert');
 const camera2d = require('./glov/camera2d.js');
 const engine = require('./glov/engine.js');
+const glov_font = require('./glov/font.js');
 const input = require('./glov/input.js');
-const { abs, atan2, floor, min, round, sqrt, PI } = Math;
+const { abs, atan2, floor, min, round, sin, sqrt, PI } = Math;
+const perf = require('./glov/perf.js');
 const pico8 = require('./glov/pico8.js');
 const { randCreate } = require('./glov/rand_alea.js');
-const soundscape = require('./glov/soundscape.js');
+// const soundscape = require('./glov/soundscape.js');
 const glov_sprites = require('./glov/sprites.js');
 const sprite_animation = require('./glov/sprite_animation.js');
 const ui = require('./glov/ui.js');
-const { clamp, defaults, lineCircleIntersect, sign } = require('../common/util.js');
-const { vec2, v2addScale, v2copy, v2floor, v2lengthSq, v2normalize, v2scale, v2same, v2set, v2sub, vec4, v4clone, v4copy } = require('./glov/vmath.js');
+const { clamp, defaults, easeOut, lineCircleIntersect, ridx, sign } = require('../common/util.js');
+const {
+  vec2,
+  v2addScale,
+  v2copy,
+  v2distSq,
+  v2floor,
+  v2lengthSq,
+  v2normalize,
+  v2same,
+  v2scale,
+  v2set,
+  v2sub,
+  vec4,
+} = require('./glov/vmath.js');
 
 const { KEYS, PAD } = input;
 
@@ -22,8 +37,9 @@ const SPEEDSCALE = 3;
 
 Z.BACKGROUND = 1;
 Z.SPRITES = 10;
-Z.PARTICLES = 20;
-Z.UI_TEST = 200;
+// hundreds for sprites here
+Z.FLOATERS = 1000;
+Z.PARTICLES = 2000;
 
 // let app = exports;
 // Virtual viewport for our game logic
@@ -40,11 +56,14 @@ let state;
 
 const PIXEL_STRICT = true;
 
+let sound_manager;
+let font;
 let rand = randCreate(0);
 let base_seed = 3;
 const SEG_SIZE = 8;
 const ID_FACTOR = 65536;
 const MAX_RAND_CONNECTIONS = 3;
+const SEGMENT_NUM_ENTITES = 10;
 
 
 // Segment intersection
@@ -61,6 +80,32 @@ function lineLineIntersect(out, p1, p2, p3, p4) {
     return true;
   }
   return false;
+}
+
+let floaters = [];
+function floater(opt) {
+  opt.time = engine.global_timer;
+  floaters.push(opt);
+}
+const FLOATER_TIME = 1000;
+const floater_style = glov_font.style(null, {
+  color: 0xFF0000ff,
+  outline_width: 4,
+  outline_color: 0x000000ff,
+});
+function drawFloaters() {
+  let now = engine.global_timer;
+  for (let ii = floaters.length - 1; ii >= 0; --ii) {
+    let fl = floaters[ii];
+    let progress = (now - fl.time) / FLOATER_TIME;
+    if (progress >= 1) {
+      ridx(floaters, ii);
+      continue;
+    }
+    font.drawSizedAligned(font.styleAlpha(floater_style, 1 - easeOut(progress, 2)),
+      fl.x, fl.y - easeOut(progress, 2) * 20, Z.FLOATERS, ui.font_height,
+      font.ALIGN.HCENTER, 0, 0, fl.text);
+  }
 }
 
 function MazeSegment(sx, sy, sid) {
@@ -81,6 +126,28 @@ function MazeSegment(sx, sy, sid) {
   let num_rand = rand.range(MAX_RAND_CONNECTIONS+1);
   for (let ii = 0; ii < num_rand; ++ii) {
     this.trace(rand.range(SEG_SIZE), rand.range(SEG_SIZE), rand.range(SEG_SIZE), rand.range(SEG_SIZE));
+  }
+  this.entities = [];
+  let valid_ent_pos = [];
+  for (let xx = 0; xx < SEG_SIZE; ++xx) {
+    for (let yy = 0; yy < SEG_SIZE; ++yy) {
+      if (this.connected(xx, yy, xx + 1, yy)) {
+        valid_ent_pos.push([xx + 0.5, yy]);
+      }
+      if (this.connected(xx, yy, xx + 1, yy + 1)) {
+        valid_ent_pos.push([xx + 0.5, yy + 0.5]);
+      }
+      if (this.connected(xx, yy, xx, yy + 1)) {
+        valid_ent_pos.push([xx, yy + 0.5]);
+      }
+    }
+  }
+  //for (let ii = 0; ii < SEGMENT_NUM_ENTITES; ++ii) {
+  while (valid_ent_pos.length) {
+    assert(valid_ent_pos.length);
+    let idx = rand.range(valid_ent_pos.length);
+    this.entities.push({ pos: valid_ent_pos[idx], type: 'eel' });
+    ridx(valid_ent_pos, idx);
   }
 }
 MazeSegment.prototype.connect = function (x0, y0, x1, y1) {
@@ -202,6 +269,7 @@ Maze.prototype.getSegment = function (sx, sy) {
   let seg = this.segments[key];
   if (!seg) {
     seg = this.segments[key] = new MazeSegment(sx, sy, key);
+    state.addEnts(sx, sy, seg.entities);
   }
   return seg;
 };
@@ -285,6 +353,7 @@ const CAVE_SCALE = 2;
 const CAVE_W = 43 * CAVE_SCALE;
 const CAVE_H = 49 * CAVE_SCALE;
 const CAVE_SKEWY = floor(CAVE_H/2);
+const CAVE_COLOR = pico8.colors[5];
 Maze.prototype.draw = function () {
   let collision = this.collision = [];
   let tx0 = floor((origin[0] - CAVE_W) / CAVE_W);
@@ -344,6 +413,7 @@ Maze.prototype.draw = function () {
         z,
         w: CAVE_W * w,
         h: CAVE_H * h,
+        color: CAVE_COLOR,
       });
 
       let bright = 1 - this.connected(tx+1, ty, tx+1, ty+1);
@@ -392,10 +462,11 @@ Maze.prototype.draw = function () {
         z,
         w: CAVE_W * w,
         h: CAVE_H * h,
+        color: CAVE_COLOR,
       });
 
       if (this.completelyBlocked(tx, ty)) {
-        ui.drawCircle(screen_x, screen_y, z+1, 20 * CAVE_SCALE, 1, pico8.colors[11]);
+        ui.drawCircle(screen_x, screen_y, z+1, 20 * CAVE_SCALE, 1, CAVE_COLOR);
       }
     }
   }
@@ -418,22 +489,28 @@ function cavePosFromWorldPos(out, w) {
   return out;
 }
 
-function Entity() {
-  this.pos = vec2(290,140);
+let last_ent_id = 0;
+function Entity(type, pos, len) {
+  this.id = ++last_ent_id;
+  if (last_ent_id === 1000) {
+    last_ent_id = 0;
+  }
+  this.type = type;
+  this.pos = vec2(pos[0], pos[1]);
   this.vel = vec2(0,0);
   this.speed = vec2(0.032, 0.032);
   this.accel = vec2(0.001, 0.001);
   this.impulse = vec2(0,0);
   this.facing = 1;
-  this.sprite = sprites.fishball;
-  this.head = anims.fishball.clone().setState('head');
-  this.body = anims.fishball.clone().setState('body');
-  this.tail = anims.fishball.clone().setState('tail');
+  this.sprite = sprites[type];
+  this.head = anims[type].clone().setState('head');
+  this.body = anims[type].clone().setState('body');
+  this.tail = anims[type].clone().setState('tail');
   this.trail = [];
   let max_dist = 9;
   let norm_dist = 7;
   let norm = 0.005;
-  for (let ii = 0; ii < 1; ++ii) {
+  for (let ii = 0; ii < len; ++ii) {
     this.trail.push({
       pos: this.pos.slice(0),
       type: 'body',
@@ -481,8 +558,37 @@ Entity.prototype.impulseFromInput = function (dt) {
   }
 };
 const ENTITY_RADIUS = 7;
+const ENT_CHOMP_DIST_SQ = (ENTITY_RADIUS*2)*(ENTITY_RADIUS*2);
 const CAVE_RADIUS = 10;
 const CAVE_RADIUS_CHECK = ENTITY_RADIUS + CAVE_RADIUS;
+
+function doChomp(ent) {
+  let hit = null;
+  for (let ii = 0; !hit && ii < state.entities.length; ++ii) {
+    let target = state.entities[ii];
+    if (target.type === ent.type || !target.visible) {
+      continue;
+    }
+    if (v2distSq(ent.pos, target.pos) < ENT_CHOMP_DIST_SQ) {
+      hit = target;
+      break;
+    }
+    for (let jj = 0; jj < target.trail.length - 1; ++jj) {
+      let tr = target.trail[jj];
+      if (v2distSq(ent.pos, tr.pos) < ENT_CHOMP_DIST_SQ) {
+        hit = target;
+        break;
+      }
+    }
+  }
+  if (hit) {
+    floater({ x: hit.pos[0], y: hit.pos[1], text: '-1' });
+    sound_manager.play('button_click');
+  } else {
+    sound_manager.play('rollover');
+  }
+}
+
 Entity.prototype.update = (function () {
   let last_pos = vec2();
   let norm_pos = vec2();
@@ -597,14 +703,35 @@ Entity.prototype.update = (function () {
       v2copy(last_pos, tr.pos);
     }
 
+    let is_chomp = this.head.state === 'chomp';
+    let cfp = anims[this.type].chomp_finish_progress;
+    let was_finished = is_chomp && this.head.progress() >= cfp;
     this.head.update(dt);
+    let is_finished = is_chomp && (!this.head.state || this.head.progress() >= cfp);
+    if (is_chomp && !was_finished && is_finished) {
+      // Look for anyone to eat
+      doChomp(this);
+    }
     this.body.update(dt);
     this.tail.update(dt);
   };
 }());
+Entity.prototype.updateAI = function (dt) {
+  if (this.type === 'eel') {
+    this.impulse[0] = sign(sin(engine.global_timer * 0.0007 + this.seed * PI * 2)) * dt * 0.5;
+    this.impulse[1] = sin(engine.global_timer * 0.003 + this.seed * 77 * PI * 2) * dt * 0.5;
+  }
+};
+
+function nearScreen(pos) {
+  return pos[0] > origin[0] - CAVE_W && pos[0] < origin[0] + game_width + CAVE_W &&
+    pos[1] > origin[1] - CAVE_H && pos[1] < origin[1] + game_height + CAVE_H;
+}
+
 function GameState() {
   this.entities = [];
-  this.player = new Entity();
+  this.player = new Entity('fishball', [290,140], 1);
+  this.player.id = 9e9;
   origin[0] = this.player.pos[0] - game_width / 2;
   origin[1] = this.player.pos[1] - game_height / 2;
   this.entities.push(this.player);
@@ -619,13 +746,52 @@ GameState.prototype.update = function (dt) {
   }
   this.player.impulseFromInput(dt);
   for (let ii = 0; ii < this.entities.length; ++ii) {
-    this.entities[ii].update(dt);
+    let ent = this.entities[ii];
+    ent.visible = nearScreen(ent.pos);
+    if (!ent.visible) {
+      continue;
+    }
+    if (ii > 0) {
+      ent.updateAI(dt);
+    }
+    ent.update(dt);
   }
 };
+GameState.prototype.addEnt = function (data) {
+  let ent = new Entity(data.type, data.pos, 2);
+  ent.seed = rand.random();
+  this.entities.push(ent);
+};
+GameState.prototype.addEnts = function (sx, sy, ents) {
+  for (let ii = 0; ii < ents.length; ++ii) {
+    let ent = ents[ii];
+    let x = ent.pos[0] + sx * SEG_SIZE;
+    let y = ent.pos[1] + sy * SEG_SIZE;
+    let screen_x = x * CAVE_W;
+    let screen_y = y * CAVE_H - CAVE_SKEWY * x;
+    state.addEnt({
+      pos: [screen_x, screen_y],
+      type: ent.type,
+    });
+  }
+};
+let num_ents = 0;
+perf.addMetric({
+  name: 'ents',
+  show_stat: 'show_fps', // always, if we're showing any metrics
+  labels: {
+    'ents: ': () => num_ents.toFixed(0),
+  },
+});
 GameState.prototype.draw = function () {
-  let z = Z.SPRITES + 1;
+  num_ents = 0;
   for (let ii = 0; ii < this.entities.length; ++ii) {
     let ent = this.entities[ii];
+    if (!ent.visible) {
+      continue;
+    }
+    ++num_ents;
+    let z = Z.SPRITES + ent.id * 0.1;
     ent.sprite.draw({
       x: floor(ent.pos[0]),
       y: floor(ent.pos[1]),
@@ -639,14 +805,16 @@ GameState.prototype.draw = function () {
         x: floor(tr.pos[0]),
         y: floor(tr.pos[1]),
         w: tr.facing,
-        z: z - (jj + 1)*0.1,
+        z: z - (jj + 1)*0.01,
         frame: ent[tr.type].getFrame(),
         rot: tr.facing === 1 ? tr.rot : tr.rot + PI,
       });
     }
   }
+
   // this.maze.drawDebug();
   this.maze.draw();
+  drawFloaters();
 };
 
 export function main() {
@@ -660,7 +828,9 @@ export function main() {
     return;
   }
 
-  // const font = engine.font;
+  sound_manager = engine.sound_manager;
+
+  font = engine.font;
 
   // Perfect sizes for pixely modes
   ui.scaleSizes(13 / 32);
@@ -694,6 +864,45 @@ export function main() {
       chomp: {
         frames: [6,7,8,0],
         times: [80,130,400,0],
+        loop: false,
+      },
+    });
+    function chompFinishProgress(anim) {
+      let chomp = anim.data.chomp;
+      let sum = 0;
+      for (let ii = 0; ii < chomp.times.length; ++ii) {
+        sum += chomp.times[ii];
+      }
+      let windup = 0;
+      for (let ii = 0; ii < chomp.times.length - 2; ++ii) {
+        windup += chomp.times[ii];
+      }
+      anim.chomp_finish_progress = windup / sum;
+    }
+    chompFinishProgress(anims.fishball);
+    sprites.eel = createSprite({
+      name: 'eel',
+      ws: [13, 13],
+      hs: [13, 13],
+      size: vec2(sprite_size, sprite_size),
+      origin: vec2(6/13, 6/13),
+    });
+    anims.eel = createAnimation({
+      head: {
+        frames: [0],
+        times: [200],
+      },
+      body: {
+        frames: [1],
+        times: [200],
+      },
+      tail: {
+        frames: [2],
+        times: [200],
+      },
+      chomp: {
+        frames: [3,0],
+        times: [80,1],
         loop: false,
       },
     });

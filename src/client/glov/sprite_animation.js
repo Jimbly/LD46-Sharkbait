@@ -60,7 +60,11 @@ GlovSpriteAnimation.prototype.progress = function () {
   if (!this.anim) {
     return 1;
   }
-  return this.time / this.anim.total_time;
+  let time = this.time;
+  for (let ii = 0; ii < this.anim_idx; ++ii) {
+    time += this.anim.times[ii];
+  }
+  return time / this.anim.total_time;
 };
 
 GlovSpriteAnimation.prototype.update = function (dt) {
