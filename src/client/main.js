@@ -1,15 +1,17 @@
 /*eslint global-require:off*/
 const glov_local_storage = require('./glov/local_storage.js');
-glov_local_storage.storage_prefix = 'glovjs-playground'; // Before requiring anything else that might load from this
+glov_local_storage.storage_prefix = 'ld46'; // Before requiring anything else that might load from this
 
+const assert = require('assert');
 const engine = require('./glov/engine.js');
 const input = require('./glov/input.js');
 const { atan2, min, sqrt, PI } = Math;
 const pico8 = require('./glov/pico8.js');
-const ui = require('./glov/ui.js');
+const { randCreate } = require('./glov/rand_alea.js');
 const soundscape = require('./glov/soundscape.js');
 const glov_sprites = require('./glov/sprites.js');
 const sprite_animation = require('./glov/sprite_animation.js');
+const ui = require('./glov/ui.js');
 const { clamp } = require('../common/util.js');
 const { vec2, v2addScale, v2copy, v2lengthSq, v2normalize, v2sub, vec4, v4clone, v4copy } = require('./glov/vmath.js');
 
@@ -29,6 +31,191 @@ let sprites = {};
 let anims = {};
 
 let state;
+
+let rand = randCreate(0);
+let base_seed = 3;
+const SEG_SIZE = 8;
+const ID_FACTOR = 65536;
+const MAX_RAND_CONNECTIONS = 3;
+function MazeSegment(sx, sy, sid) {
+  rand.reseed(base_seed + sid);
+  let connect_left = rand.range(SEG_SIZE - 2) + 1;
+  let connect_top = rand.range(SEG_SIZE - 2) + 1;
+  rand.reseed(base_seed + sid + 1);
+  let connect_right = rand.range(SEG_SIZE - 2) + 1;
+  rand.reseed(base_seed + sid + ID_FACTOR);
+  rand.range(1);
+  let connect_bottom = rand.range(SEG_SIZE - 2) + 1;
+  this.connectivity = new Uint8Array(SEG_SIZE*SEG_SIZE*3);
+  rand.reseed(base_seed + sid);
+  // console.log('****');
+  this.trace(connect_top, 0, connect_bottom, SEG_SIZE);
+  // console.log('****');
+  this.trace(0, connect_left, SEG_SIZE, connect_right);
+  let num_rand = rand.range(MAX_RAND_CONNECTIONS+1);
+  for (let ii = 0; ii < num_rand; ++ii) {
+    this.trace(rand.range(SEG_SIZE), rand.range(SEG_SIZE), rand.range(SEG_SIZE), rand.range(SEG_SIZE));
+  }
+}
+MazeSegment.prototype.connect = function (x0, y0, x1, y1) {
+  if (x0 > x1) {
+    let t = x0;
+    x0 = x1;
+    x1 = t;
+  }
+  if (y0 > y1) {
+    let t = y0;
+    y0 = y1;
+    y1 = t;
+  }
+  let offs;
+  let dx = x1 - x0;
+  let dy = y1 - y0;
+  if (dx === 1 && dy === 0) {
+    offs = 0;
+  } else if (dx === 0 && dy === 1) {
+    offs = 1;
+  } else if (dx === 1 && dy === 1) {
+    offs = 2;
+  } else {
+    assert(false);
+  }
+  this.connectivity[(x0 + y0 * SEG_SIZE)*3 + offs] = 1;
+};
+MazeSegment.prototype.connected = function (x0, y0, x1, y1) {
+  if (x0 > x1) {
+    let t = x0;
+    x0 = x1;
+    x1 = t;
+  }
+  if (y0 > y1) {
+    let t = y0;
+    y0 = y1;
+    y1 = t;
+  }
+  let offs;
+  let dx = x1 - x0;
+  let dy = y1 - y0;
+  if (dx === 1 && dy === 0) {
+    offs = 0;
+  } else if (dx === 0 && dy === 1) {
+    offs = 1;
+  } else if (dx === 1 && dy === 1) {
+    offs = 2;
+  } else {
+    assert(false);
+  }
+  return this.connectivity[(x0 + y0 * SEG_SIZE)*3 + offs];
+};
+MazeSegment.prototype.trace = function (x0, y0, x1, y1) {
+  if (x0 === x1 && y0 === y1) {
+    return;
+  }
+  let destx = x0;
+  let desty = y0;
+  if (x1 === x0 + 1 && y1 === y0 ||
+    x1 === x0 + 1 && y1 === y0 + 1 ||
+    x1 === x0 && y1 === y0 + 1
+  ) {
+    // direct connect possible
+    destx = x1;
+    desty = y1;
+  } else {
+    let horiz = (x0 !== x1);
+    if (horiz && x0 < x1 && x0 === SEG_SIZE - 1) {
+      horiz = false;
+    }
+    let vert = (y0 !== y1);
+    if (vert && y0 < y1 && y0 === SEG_SIZE - 1) {
+      vert = false;
+    }
+    assert(horiz || vert);
+    if (horiz && vert) {
+      if (rand.range(2)) {
+        horiz = false;
+      } else {
+        vert = false;
+      }
+    }
+    if (horiz) {
+      if (x0 < x1) {
+        destx++;
+        if (rand.range(2) && desty !== SEG_SIZE - 1) {
+          desty++;
+        }
+      } else {
+        destx--;
+        if (rand.range(2) && desty) {
+          desty--;
+        }
+      }
+    } else {
+      if (y0 < y1) {
+        desty++;
+        if (rand.range(2) && destx !== SEG_SIZE - 1) {
+          destx++;
+        }
+      } else {
+        desty--;
+        if (rand.range(2) && destx) {
+          destx--;
+        }
+      }
+    }
+  }
+  // console.log(`trace(${x0},${y0}, ${x1},${y1}): connect(${destx},${desty})`);
+  this.connect(x0, y0, destx, desty);
+  this.trace(destx, desty, x1, y1);
+};
+function Maze() {
+  this.segments = [];
+}
+Maze.prototype.getSegment = function (sx, sy) {
+  let key = sx + sy * ID_FACTOR;
+  let seg = this.segments[key];
+  if (!seg) {
+    seg = this.segments[key] = new MazeSegment(sx, sy, key);
+  }
+  return seg;
+};
+const color_connected = vec4(1,1,0.5,1);
+const color_disconnected = vec4(0.3, 0.3, 0.3, 1);
+const hex_dx = sqrt(1 + 0.5*0.5);
+const draw_debug_scale = 10;
+const skewy = 0.5;
+Maze.prototype.drawDebugSub = function (sx, sy, x0, y0) {
+  let seg = this.getSegment(sx,sy);
+  let z = Z.SPRITES + 1;
+  function screenX(xx,yy) {
+    return 0.5 + x0 + xx*hex_dx*draw_debug_scale;
+  }
+  function screenY(xx,yy) {
+    return 0.5 + y0 + yy*draw_debug_scale - skewy * xx * draw_debug_scale;
+  }
+  for (let xx = 0; xx < SEG_SIZE; ++xx) {
+    for (let yy = 0; yy < SEG_SIZE; ++yy) {
+      ui.drawLine(screenX(xx,yy), screenY(xx,yy), screenX(xx+1,yy), screenY(xx+1,yy), z, 1, 1,
+        seg.connected(xx, yy, xx+1, yy) ? color_connected : color_disconnected);
+      ui.drawLine(screenX(xx,yy), screenY(xx,yy), screenX(xx+1,yy+1), screenY(xx+1,yy+1), z, 1, 1,
+        seg.connected(xx, yy, xx+1, yy+1) ? color_connected : color_disconnected);
+      ui.drawLine(screenX(xx,yy), screenY(xx,yy), screenX(xx,yy+1), screenY(xx,yy+1), z, 1, 1,
+        seg.connected(xx, yy, xx, yy+1) ? color_connected : color_disconnected);
+    }
+
+  }
+};
+Maze.prototype.drawDebug = function () {
+  let x0 = 0;
+  let y0 = 0;
+  for (let sx = 0; sx < 5; ++sx) {
+    for (let sy = 0; sy < 5; ++sy) {
+      this.drawDebugSub(sx,sy,
+        x0 + sx*hex_dx*SEG_SIZE*draw_debug_scale,
+        y0 + (sy - skewy * sx)*SEG_SIZE*draw_debug_scale);
+    }
+  }
+};
+
 function Entity() {
   this.pos = vec2(100.5,100.5);
   this.vel = vec2(0,0);
@@ -143,6 +330,7 @@ function GameState() {
   this.entities = [];
   this.player = new Entity();
   this.entities.push(this.player);
+  this.maze = new Maze();
 }
 function actionDown() {
   return input.keyDown(KEYS.SPACE) || input.keyDown(KEYS.E) || input.keyDown(KEYS.ENTER) || input.padButtonDown(PAD.A);
@@ -179,6 +367,7 @@ GameState.prototype.draw = function () {
       });
     }
   }
+  this.maze.drawDebug();
 };
 
 export function main() {

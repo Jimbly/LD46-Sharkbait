@@ -7,7 +7,25 @@ LD46 Entry by Jimbly - "TBD"
 
 Start with: `npm start` (after running `npm i` once)
 
-EVO demake:
+Key systems:
+  Exploration - scrolling view, generate caves - can hide in caves?
+  Enemies to eat/fight/avoid
+  HP + XP + upgrades
+
+Art:
+  background:
+    parallax
+    swimming fish
+    rising bubbles
+  caves
+  enemies
+  sfx
+  music
+
+Stretch:
+  respec (if upgrades are interesting enough)
+
+EVO demake idea:
   Fish? Robofish? More alien? Blobs? Cells? Space Whales?
   View is dark except around you (maybe slight view of terrain?)
   Virtual pixel resolution increases as your view range increases (or, we just scale with non-strict-pixely?)
@@ -26,7 +44,7 @@ EVO demake:
   Respec pickup lets you rechoose last 3 upgrades or so
   Intensity affect music and enemy spawning rate/strength, reset on level up, build as XP (not time?) progresses
 
-Grand strategy:
+Grand strategy idea:
   Have a Mana Tree or (or living Keep?) that you spend mana from
   Each turn, get one card, choose how to play it:
     always land + structure - either activate all of a given land type, or add one structure to any land
