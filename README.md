@@ -8,9 +8,9 @@ LD46 Entry by Jimbly - "TBD"
 Start with: `npm start` (after running `npm i` once)
 
 Key systems:
-  Exploration - scrolling view, generate caves - can hide in caves?
   Enemies to eat/fight/avoid
   HP + XP + upgrades
+  Progress indication - depth, level, something.  High score?
 
 Art:
   background:
