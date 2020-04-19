@@ -9,20 +9,40 @@ Start with: `npm start` (after running `npm i` once)
 
 Key systems:
   level up and upgrades
-  spawn harder enemies based on level and/or distance from origin?
+    too much healing
+    first shark should be earlier, so people see it
+    implement speed (also affect acceleration/handling?)
+    implement visibility
+    radar power-up: exclamation above head (or vis hider turns red?) like levelup-ok message!
   Death
   Progress indication - depth, level, something.  High score?
+  Title screen, just a big play button
+  Something non-deadly to search for and find, perhaps with a cue as to where it is?  One per segment, not on traced route?
+
 
 Art:
   background:
     parallax
     swimming fish
     rising bubbles
+    fish become bones upon death!
+    particles / blood upon bite
   caves
   enemies
   sfx
+    hit enemy
+    enemy die / hit enemy fatal
+    miss enemy
+    get hit
+    get missed
+    electric?
+    eat food
+    level up (musical)
+    upgrade choice (musical)
+    die (musical)
   music
 
+trigger pixely transition on death and respawn, at least, maybe level up dialog?
 shark needs a bigger mouth when chomping
 
 Stretch:

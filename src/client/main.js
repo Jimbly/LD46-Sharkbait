@@ -15,7 +15,7 @@ const { randCreate } = require('./glov/rand_alea.js');
 const glov_sprites = require('./glov/sprites.js');
 const sprite_animation = require('./glov/sprite_animation.js');
 const ui = require('./glov/ui.js');
-const { clamp, defaults, easeOut, lerp, lineCircleIntersect, ridx, sign } = require('../common/util.js');
+const { clamp, defaults, easeOut, lerp, lineCircleIntersect, ridx, sign, unit_vec4 } = require('../common/util.js');
 const {
   vec2,
   v2addScale,
@@ -68,8 +68,9 @@ let base_seed = 3;
 const SEG_SIZE = 8;
 const ID_FACTOR = 65536;
 const MAX_RAND_CONNECTIONS = 3;
-const SEGMENT_NUM_ENTITES = 10;
-
+const SEGMENT_ENT_DENSITY = 0.5;
+const DROP_EXPIRE_TIME = 15000;
+const DROP_BLINK_TIME = DROP_EXPIRE_TIME - 5000;
 
 // Segment intersection
 // http://local.wasp.uwa.edu.au/~pbourke/geometry/lineline2d/
@@ -94,6 +95,16 @@ const style_status = glov_font.style(null, {
 });
 const style_status_xp = glov_font.style(style_status, {
   color: pico8.font_colors[10],
+});
+// const style_levelup_title = glov_font.style(null, {
+//   color: pico8.font_colors[0],
+//   outline_width: 5,
+//   outline_color: pico8.font_colors[10],
+// });
+const style_levelup_title = glov_font.style(null, {
+  color: pico8.font_colors[7],
+  outline_width: 5, // 2.667,
+  outline_color: pico8.font_colors[0],
 });
 
 let floaters = [];
@@ -133,18 +144,96 @@ function drawFloaters() {
       ridx(floaters, ii);
       continue;
     }
-    font.drawSizedAligned(font.styleAlpha(floater_styles[fl.style], easeOut(1 - progress, 2)),
-      fl.x, fl.y - easeOut(progress, 2) * 20, Z.FLOATERS, ui.font_height,
-      font.ALIGN.HCENTER, 0, 0, fl.text);
+    let alpha = easeOut(1 - progress, 2);
+    let y = fl.y - easeOut(progress, 2) * 20;
+    if (fl.text) {
+      font.drawSizedAligned(font.styleAlpha(floater_styles[fl.style], alpha),
+        fl.x, y, Z.FLOATERS - progress, ui.font_height,
+        font.ALIGN.HCENTER, 0, 0, fl.text);
+    }
+    if (fl.icon) {
+      sprites.ui.draw({
+        x: fl.x - 7, y: y - 7, z: Z.FLOATERS - progress,
+        frame: fl.icon,
+        color: vec4(1,1,1,alpha),
+      });
+    }
   }
 }
 
-let enemy_types = [
-  'eel',
-  'greenfish',
-  'pufferfish',
-  'shark',
+let tiers = [
+  [
+    'none',
+    'eel',
+  ],
+  [
+    'none',
+    'eel',
+    'eel',
+    'eel',
+    'eel',
+    'pufferfish',
+  ],
+  [
+    'none',
+    'none',
+    'eel',
+    'eel',
+    'eel',
+    'greenfish',
+    'pufferfish',
+  ],
+  [
+    'none',
+    'greenfish',
+  ],
+  [
+    'eel',
+    'greenfish',
+    'greenfish',
+    'greenfish',
+    'pufferfish',
+  ],
+  [
+    'none',
+    'none',
+    'none',
+    'none',
+    'shark',
+  ],
+  [
+    'none',
+    'none',
+    'eel',
+    'eel',
+    'shark',
+  ],
+  [
+    'none',
+    'pufferfish',
+    'eel',
+    'shark',
+    'shark',
+  ],
+  [
+    'none',
+    'shark',
+    'shark',
+  ],
+  [
+    'eel',
+    'greenfish',
+    'pufferfish',
+    'shark',
+  ],
 ];
+const hex_dx = sqrt(1 - 0.5*0.5);
+const skewy = 0.5;
+function tierDataFromSPos(unskewed_seg_x, unskewed_seg_y) {
+  let dist = sqrt(unskewed_seg_x*unskewed_seg_x + unskewed_seg_y*unskewed_seg_y);
+  let tier = floor(dist * 0.5);
+  return { dist, tier };
+}
 function MazeSegment(sx, sy, sid) {
   rand.reseed(base_seed + sid);
   let connect_left = rand.range(SEG_SIZE - 2) + 1;
@@ -164,7 +253,7 @@ function MazeSegment(sx, sy, sid) {
   for (let ii = 0; ii < num_rand; ++ii) {
     this.trace(rand.range(SEG_SIZE), rand.range(SEG_SIZE), rand.range(SEG_SIZE), rand.range(SEG_SIZE));
   }
-  this.entities = [];
+
   let valid_ent_pos = [];
   for (let xx = 0; xx < SEG_SIZE; ++xx) {
     for (let yy = 0; yy < SEG_SIZE; ++yy) {
@@ -179,12 +268,29 @@ function MazeSegment(sx, sy, sid) {
       }
     }
   }
-  //for (let ii = 0; ii < SEGMENT_NUM_ENTITES; ++ii) {
-  while (valid_ent_pos.length) {
+  this.tier_data = tierDataFromSPos((sx + 0.5) * hex_dx, (sy + 0.5) - (sx + 0.5) * skewy);
+  let tier = this.tier_data.tier;
+  let enemy_types = tiers[min(tier, tiers.length - 1)];
+  let num_to_spawn = floor(SEGMENT_ENT_DENSITY * valid_ent_pos.length);
+  let entities = this.entities = [];
+  function spawn(type) {
+    assert(num_to_spawn);
+    --num_to_spawn;
     assert(valid_ent_pos.length);
     let idx = rand.range(valid_ent_pos.length);
-    this.entities.push({ pos: valid_ent_pos[idx], type: enemy_types[rand.range(enemy_types.length)] });
+    if (type !== 'none') {
+      entities.push({ pos: valid_ent_pos[idx], type });
+    }
     ridx(valid_ent_pos, idx);
+  }
+  // guarantee one of each
+  for (let ii = 0; ii < enemy_types.length; ++ii) {
+    spawn(enemy_types[ii]);
+  }
+  // then random
+  while (num_to_spawn) {
+    let type = enemy_types[rand.range(enemy_types.length)];
+    spawn(type);
   }
 }
 MazeSegment.prototype.connect = function (x0, y0, x1, y1) {
@@ -312,17 +418,15 @@ Maze.prototype.getSegment = function (sx, sy) {
 };
 const color_connected = vec4(1,1,0.5,1);
 const color_disconnected = vec4(0.3, 0.3, 0.3, 1);
-const hex_dx = sqrt(1 - 0.5*0.5);
 const draw_debug_scale = 10;
-const skewy = 0.5;
 Maze.prototype.drawDebugSub = function (sx, sy, x0, y0) {
   let seg = this.getSegment(sx,sy);
-  let z = Z.BACKGROUND + 1;
+  let z = Z.SPRITES - 1;
   function screenX(xx,yy) {
-    return 0.5 + x0 + xx*hex_dx*draw_debug_scale;
+    return 0.5 + x0 + xx*hex_dx*draw_debug_scale + sx * 2;
   }
   function screenY(xx,yy) {
-    return 0.5 + y0 + yy*draw_debug_scale - skewy * xx * draw_debug_scale;
+    return 0.5 + y0 + yy*draw_debug_scale - skewy * xx * draw_debug_scale + sy * 3;
   }
   for (let xx = 0; xx < SEG_SIZE; ++xx) {
     for (let yy = 0; yy < SEG_SIZE; ++yy) {
@@ -392,6 +496,13 @@ const CAVE_H = 49 * CAVE_SCALE;
 const CAVE_SKEWY = floor(CAVE_H/2);
 const CAVE_COLOR = pico8.colors[5];
 const DRAW_PAD = 2; // Adding a bunch of extra just to get collision for AI
+Maze.prototype.getTierData = function (screen_x, screen_y) {
+  let tx = floor(screen_x / CAVE_W);
+  let ty = floor((screen_y + tx * CAVE_SKEWY) / CAVE_H);
+  let sx = floor(tx / SEG_SIZE);
+  let sy = floor(ty / SEG_SIZE);
+  return this.getSegment(sx, sy).tier_data;
+};
 Maze.prototype.draw = function () {
   let collision = this.collision = [];
   let tx0 = floor((origin[0] - CAVE_W) / CAVE_W) - DRAW_PAD;
@@ -527,18 +638,27 @@ Maze.prototype.draw = function () {
 //   return out;
 // }
 
+function xpForLevel(level) {
+  return 10 + (level - 1);
+}
+
+let last_action_time = 0;
+
 const ent_stats = {
   fishball: {
-    hp: MAX_HP,
+    hp: 6,
     damage: 1, // engine.DEBUG ? 10 : 1,
     speed: vec2(0.032, 0.032),
     len: 1,
     head_rot: false,
     normalize_speed: 1,
+    damage_pips: 1,
     speed_pips: 1,
     vis_pips: 1,
     hp_pips: 1,
     xp: 0,
+    xp_for_level: xpForLevel(1),
+    level: 1,
   },
   eel: {
     hp: 2,
@@ -577,7 +697,6 @@ let last_ent_id = 0;
 function Entity(type, pos) {
   this.id = ++last_ent_id;
   this.is_player = type === 'fishball';
-  this.impulse_times_dt = !this.is_player;
   if (last_ent_id === 1000) {
     last_ent_id = 0;
   }
@@ -644,6 +763,14 @@ Entity.prototype.impulseFromInput = function (dt) {
   this.impulse[0] += input.keyDown(KEYS.RIGHT) + input.keyDown(KEYS.D) + input.padButtonDown(PAD.RIGHT);
   this.impulse[1] -= input.keyDown(KEYS.UP) + input.keyDown(KEYS.W) + input.padButtonDown(PAD.UP);
   this.impulse[1] += input.keyDown(KEYS.DOWN) + input.keyDown(KEYS.S) + input.padButtonDown(PAD.DOWN);
+  v2scale(this.impulse, this.impulse, 1/dt);
+  let lensq = v2lengthSq(this.impulse);
+  if (lensq) {
+    last_action_time = engine.global_timer;
+  }
+  if (lensq > 1) {
+    v2scale(this.impulse, this.impulse, 1/sqrt(lensq));
+  }
   v2scale(this.impulse, this.impulse, SPEEDSCALE);
   if (engine.DEBUG && input.keyDown(KEYS.SHIFT)) {
     v2scale(this.impulse, this.impulse, 3);
@@ -701,11 +828,18 @@ function doPickup(player, drop) {
   let old_hp = player.hp;
   player.hp = min(player.hp + drop.hp, player.max_hp);
   let dhp = player.hp - old_hp;
+  let old_xp = player.xp;
   player.xp += drop.xp;
   player.head.setState('happy');
   sound_manager.play('button_click');
   floater({ x: drop.x - 8, y: drop.y, text: `+${drop.xp}`, style: 'xp' });
   floater({ x: drop.x + 8, y: drop.y, text: `+${dhp}`, style: 'hp' });
+
+  if (old_xp < player.xp_for_level && player.xp >= player.xp_for_level) {
+    setTimeout(function () {
+      floater({ x: player.pos[0], y: player.pos[1], text: '', style: 'xp', icon: 5 });
+    }, 500);
+  }
 }
 function doChomp(ent, full_body) {
   let hit = chompTarget(ent, full_body);
@@ -724,7 +858,8 @@ function doChomp(ent, full_body) {
     let now = engine.global_timer;
     let damage = ent.damage;
     let hit_player = !is_player;
-    floater({ x: hit.pos[0], y: hit.pos[1], text: `-${damage}`, style: hit_player ? 'player' : 'enemy' });
+    floater({ x: hit.pos[0], y: hit.pos[1], text: `${hit_player?'-':''}${damage}`,
+      style: hit_player ? 'player' : 'enemy' });
     hit.hp -= damage;
     hit.invincible_until = now + (hit_player ? INVINCIBILITY_TIME_PLAYER : INVINCIBILITY_TIME);
     hit.head.setState('ow');
@@ -737,7 +872,6 @@ function doChomp(ent, full_body) {
         state.drops.push({
           pos: hit.pos.slice(0),
           x: hit.pos[0], y: hit.pos[1], hp: hit.max_hp, frame: 10, z: Z.DROPS_EARLY, xp: hit.max_hp,
-          time: now,
         });
       } else {
         // Remove a bit of the tail
@@ -792,18 +926,14 @@ Entity.prototype.update = (function () {
     if (this.busy()) {
       v2set(this.impulse, 0, 0);
       if (this.head.state === 'chomp') {
-        this.impulse[0] = (1 - this.head.progress()) * this.facing * (this.impulse_times_dt ? 1 : dt) *
-          this.chomp_speed_scale;
+        this.impulse[0] = (1 - this.head.progress()) * this.facing * this.chomp_speed_scale;
       }
     }
 
     v2copy(start_pos, this.pos);
     for (let ii = 0; ii < 2; ++ii) {
       let max_dv = dt * this.accel[ii];
-      let imp = this.impulse[ii];
-      if (this.impulse_times_dt) {
-        imp *= dt;
-      }
+      let imp = this.impulse[ii] * dt;
       if (abs(imp) < 1) {
         imp = 0;
       }
@@ -997,26 +1127,189 @@ function GameState() {
   origin[1] = this.player.pos[1] - game_height / 2;
   this.entities.push(this.player);
   this.maze = new Maze();
+  this.levelup_active = false;
+  this.paused = false;
 }
+let need_action_release = false;
 function actionDown() {
-  return input.keyDown(KEYS.SPACE) || input.keyDown(KEYS.E) || input.keyDown(KEYS.ENTER) || input.padButtonDown(PAD.A);
+  let ret = input.keyDown(KEYS.SPACE) || input.keyDown(KEYS.E) || input.keyDown(KEYS.ENTER) ||
+    input.padButtonDown(PAD.A);
+  if (ret) {
+    last_action_time = engine.global_timer;
+  }
+  if (need_action_release) {
+    if (ret) {
+      return false;
+    }
+    need_action_release = false;
+  }
+  return ret;
 }
+function actionDownEdge() {
+  if (input.keyDownEdge(KEYS.SPACE) || input.keyDownEdge(KEYS.E) || input.keyDownEdge(KEYS.ENTER) ||
+    input.padButtonDownEdge(PAD.A)
+  ) {
+    need_action_release = true;
+    return true;
+  }
+  return false;
+}
+const LEVELUP_GUARD_DIST_SQ = 120*120;
+const LEVELUP_DROP_GUARD_DIST_SQ = 60*60;
+function levelUpOK() {
+  let pos = state.player.pos;
+  if (state.player.xp < state.player.xp_for_level) {
+    return false;
+  }
+  if (floaters.length) {
+    return false;
+  }
+  if (engine.global_timer - last_action_time > 2000) {
+    return true;
+  }
+  for (let ii = 1; ii < state.entities.length; ++ii) {
+    let ent = state.entities[ii];
+    if (ent.visible && v2distSq(pos, ent.pos) < LEVELUP_GUARD_DIST_SQ) {
+      return false;
+    }
+  }
+  for (let ii = 0; ii < state.drops.length; ++ii) {
+    let drop = state.drops[ii];
+    if (v2distSq(pos, drop.pos) < LEVELUP_DROP_GUARD_DIST_SQ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+const MAX_SPEED = Infinity;
+const MAX_DAMAGE = Infinity;
+const MAX_VIS = 5;
+GameState.prototype.startLevelUp = function () {
+  this.levelup_active = true;
+  this.paused = true;
+  let choices = [];
+  let player = this.player;
+  if (player.max_hp !== MAX_HP) {
+    choices.push({ type: 'hp', w: 1/player.hp_pips, frame: 9 });
+  }
+  if (player.speed_pips !== MAX_SPEED) {
+    choices.push({ type: 'speed', w: 1/player.speed_pips, frame: 6 });
+  }
+  if (player.damage_pips !== MAX_DAMAGE) {
+    choices.push({ type: 'damage', w: 1/player.damage_pips, frame: 7 });
+  }
+  if (player.vis_pips !== MAX_VIS) {
+    choices.push({ type: 'vis', w: 1/player.vis_pips, frame: 8 });
+  }
+  let tot = 0;
+  for (let ii = 0; ii < choices.length; ++ii) {
+    tot += choices[ii].w;
+  }
+  rand.reseed(player.level * 777 + base_seed);
+  this.levelup_choices = [];
+  this.levelup_choice = -1;
+  this.levelup_last_mouse_idx = -1;
+  let self = this;
+  function chooseOne() {
+    let idx;
+    let r = rand.random() * tot;
+    for (idx = 0; idx < choices.length; ++idx) {
+      r -= choices[idx].w;
+      if (r <= 0 || idx === choices.length - 1) {
+        break;
+      }
+    }
+    self.levelup_choices.push(choices[idx]);
+    ridx(choices, idx);
+  }
+  chooseOne();
+  chooseOne();
+};
+GameState.prototype.finishLevelUp = function (choice) {
+  let { player } = this;
+  this.levelup_active = false;
+  this.paused = false;
+  floater({ x: player.pos[0], y: player.pos[1], text: '', style: 'xp', icon: choice.frame });
+  player.level++;
+  player.xp -= player.xp_for_level;
+  player.xp_for_level = xpForLevel(player.level);
+  switch (choice.type) {
+    case 'speed':
+      ++player.speed_pips;
+      break;
+    case 'vis':
+      ++player.vis_pips;
+      break;
+    case 'damage':
+      ++player.damage_pips;
+      ++player.damage;
+      break;
+    case 'hp':
+      player.max_hp += 2;
+      break;
+    default:
+      assert(0);
+  }
+  let dhp = player.max_hp - player.hp;
+  if (dhp) {
+    player.hp += dhp;
+    setTimeout(function () {
+      floater({ x: player.pos[0], y: player.pos[1], text: `+${dhp}`, style: 'hp' });
+    }, 500);
+  }
+};
 GameState.prototype.update = function (dt) {
-  if (!this.player.busy(true) && actionDown()) {
-    this.player.chomp_finished = false;
-    this.player.head.setState('chomp');
+  // Player
+  let player = this.player;
+  if (!state.paused && !player.busy(true)) {
+    if (levelUpOK()) {
+      this.startLevelUp();
+      // ui.print(null, player.pos[0], player.pos[1], 10000, 'Level-up OK');
+    }
+    if (!this.paused && actionDown()) {
+      player.chomp_finished = false;
+      player.head.setState('chomp');
+    }
+  }
+  if (engine.DEBUG) {
+    if (input.keyDownEdge(KEYS.L)) {
+      doPickup(player, { pos: player.pos.slice(0), x: player.pos[0],
+        y: this.player.pos[1], z: Z.DROPS,
+        xp: this.player.xp_for_level, hp: 100 });
+    }
+    if (input.keyDownEdge(KEYS.P)) {
+      this.drops.push({
+        pos: player.pos.slice(0),
+        x: player.pos[0], y: player.pos[1], hp: player.max_hp, frame: 10, z: Z.DROPS_EARLY, xp: player.max_hp,
+      });
+    }
   }
   this.player.impulseFromInput(dt);
-  for (let ii = 0; ii < this.entities.length; ++ii) {
-    let ent = this.entities[ii];
-    ent.visible = nearScreen(ent.pos);
-    if (!ent.visible) {
-      continue;
+
+  // General
+  if (!this.paused) {
+    for (let ii = 0; ii < this.entities.length; ++ii) {
+      let ent = this.entities[ii];
+      ent.visible = nearScreen(ent.pos);
+      if (!ent.visible) {
+        continue;
+      }
+      if (ii > 0) {
+        ent.updateAI(dt);
+      }
+      ent.update(dt);
     }
-    if (ii > 0) {
-      ent.updateAI(dt);
+    for (let ii = this.drops.length - 1; ii >= 0; --ii) {
+      let drop = this.drops[ii];
+      drop.counter = (drop.counter || 0) + dt;
+      if (drop.counter > 1500) {
+        drop.z = Z.DROPS;
+      }
+      if (drop.counter > DROP_EXPIRE_TIME) {
+        ridx(this.drops, ii);
+      }
     }
-    ent.update(dt);
   }
 };
 GameState.prototype.addEnt = function (data) {
@@ -1087,18 +1380,22 @@ GameState.prototype.draw = function () {
   }
   for (let ii = this.drops.length - 1; ii >= 0; --ii) {
     let drop = this.drops[ii];
-    if (engine.global_timer - drop.time > 1500) {
-      drop.z = Z.DROPS;
-    }
-    if (!nearScreen(drop.pos)) {
-      ridx(this.drops, ii);
-    } else {
+    if (nearScreen(drop.pos)) {
+      if (!drop.color) {
+        drop.color = vec4(1,1,1,1);
+      }
+      if (drop.counter > DROP_BLINK_TIME) {
+        drop.color[3] = (((drop.counter - DROP_BLINK_TIME) % 500) > 250) ? 1 : 0;
+      }
       sprites.drops.draw(drop);
     }
   }
 
   // this.maze.drawDebug();
   this.maze.draw();
+  if (floaters.length) {
+    last_action_time = engine.global_timer;
+  }
   drawFloaters();
 };
 
@@ -1110,9 +1407,16 @@ export function main() {
     viewport_postprocess: false,
     sound_manager: require('./glov/sound_manager.js').create(),
     show_fps: false,
+    ui_sprites: {
+      button: ['ui/button', [4, 9, 4], [17]],
+      button_down: ['ui/button_down', [4, 9, 4], [17]],
+      button_rollover: ['ui/button_rollover', [4, 9, 4], [17]],
+    },
   })) {
     return;
   }
+  ui.color_button.rollover = unit_vec4;
+  ui.color_button.down = unit_vec4;
 
   sound_manager = engine.sound_manager;
 
@@ -1297,13 +1601,13 @@ export function main() {
     });
     sprites.ui = createSprite({
       name: 'ui',
-      ws: [13, 13, 13],
+      ws: [13, 13, 13, 13],
       hs: [13, 13, 13, 13],
       size: vec2(13, 13),
     });
     sprites.drops = createSprite({
       name: 'ui',
-      ws: [13, 13, 13],
+      ws: [13, 13, 13, 13],
       hs: [13, 13, 13, 13],
       size: vec2(13, 13),
       origin: vec2(6/13, 6/13),
@@ -1361,12 +1665,13 @@ export function main() {
   }
 
   const POS_HP = 11;
-  const POS_PAD = 13;
+  const POS_PAD = 8;
   const POS_DAMAGE = POS_HP + (MAX_HP/2) * 14 + POS_PAD;
   const VALUE_WIDTH = 10;
   const POS_SPEED = POS_DAMAGE + 14 + VALUE_WIDTH + POS_PAD;
   const POS_VIS = POS_SPEED + 14 + VALUE_WIDTH + POS_PAD;
   const POS_XP = POS_VIS + 14 + VALUE_WIDTH + POS_PAD;
+  const POS_TIER = POS_XP + 14 + VALUE_WIDTH + POS_PAD + 28;
   function drawUI() {
     sprites.header.draw({
       x: 0, y: 0, z: Z.UI - 1,
@@ -1375,7 +1680,7 @@ export function main() {
     });
     let y = 1;
     let z = Z.UI;
-    let { hp, max_hp, damage, speed_pips, xp, vis_pips } = state.player;
+    let { hp, max_hp, damage, speed_pips, xp, xp_for_level, level, vis_pips } = state.player;
     let blink = hp <= 3;
     for (let ii = 0; ii < max_hp / 2; ++ii) {
       let pos = POS_HP + ii * 14;
@@ -1384,7 +1689,7 @@ export function main() {
         if (frame < 2) {
           frame += 2;
         } else {
-          frame = 2;
+          frame = 12;
         }
       }
       sprites.ui.draw({ x: pos, y, z, frame });
@@ -1394,14 +1699,100 @@ export function main() {
 
     sprites.ui.draw({ x: POS_SPEED, y, z, frame: 6 });
 
-    // sprites.ui.draw({ x: POS_VIS, y, z, frame: 8 });
+    sprites.ui.draw({ x: POS_VIS, y, z, frame: 8 });
+
+    sprites.ui.draw({ x: POS_TIER, y, z, frame: 13 });
 
     sprites.ui.draw({ x: POS_XP, y, z, frame: 5 });
     y += 3;
     ui.print(style_status, POS_DAMAGE + 16 + 2, y, z, `${damage}`);
     ui.print(style_status, POS_SPEED + 16 + 1, y, z, `${speed_pips}`);
-    // ui.print(style_status, POS_VIS + 16, y, z, `${vis_pips}`);
-    ui.print(style_status_xp, POS_XP + 16 + 1, y, z, `${xp}/100`);
+    ui.print(style_status, POS_VIS + 16, y, z, `${vis_pips}`);
+
+    let p = state.player.pos;
+    let px = p[0];
+    let py = p[1];
+    let tier_data = state.maze.getTierData(px, py);
+    ui.print(style_status, POS_TIER + 16, y, z, `${floor(tier_data.dist) + 1}`);
+    font.drawSizedAligned(style_status, POS_XP + 7, y, z + 1, ui.font_height, font.ALIGN.HCENTER,
+      0, 0, `${level}`);
+    ui.print(style_status_xp, POS_XP + 16 + 1, y, z, `${xp}/${xp_for_level}`);
+  }
+
+  function doLevelUp() {
+    let { player, levelup_last_mouse_idx } = state;
+    let choices = state.levelup_choices;
+    let VBORDER = 30;
+    let PADDING = 10;
+    let BUTTON_SCALE = 5;
+    let BUTTONW = 17 * BUTTON_SCALE;
+    let PANELW = BUTTONW * 2 + PADDING * 3;
+    let HBORDER = (game_width - PANELW)/2 | 0;
+    let BUTTONH = BUTTONW;
+    let x = HBORDER;
+    let y = VBORDER;
+    let z = Z.UI;
+    x += PADDING;
+    y += PADDING + 8;
+    let title_size = ui.font_height * 2;
+    sprites.ui.draw({
+      x: game_width / 2 - 28,
+      y: y - (26 - title_size) / 2,
+      z, frame: 5,
+      w: 2, h: 2,
+    });
+    if (input.keyDownEdge(KEYS.A) || input.keyDownEdge(KEYS.LEFT) || input.padButtonDownEdge(PAD.LEFT)) {
+      state.levelup_choice = 0;
+    }
+    if (input.keyDownEdge(KEYS.D) || input.keyDownEdge(KEYS.RIGHT) || input.padButtonDownEdge(PAD.RIGHT)) {
+      state.levelup_choice = 1;
+    }
+    font.drawSized(style_levelup_title, game_width / 2 + 4, y, z, title_size, `${player.level + 1}`);
+    y += title_size + 20;
+    let mouse_idx = -1;
+    let finish = false;
+    for (let ii = 0; ii < choices.length; ++ii) {
+      let choice = choices[ii];
+      let selected = state.levelup_choice === ii;
+      if (ui.buttonImage({
+        x, y, z, img: sprites.ui, frame: choice.frame,
+        w: BUTTONW,
+        h: BUTTONH,
+        shrink: 13/17,
+        base_name: selected ? 'button_rollover' : 'button',
+        no_focus: true,
+      }) || selected && actionDownEdge()) {
+        state.levelup_choice = ii;
+        finish = true;
+      }
+      if (!input.touch_mode && ui.button_mouseover) {
+        mouse_idx = ii;
+      }
+      if (selected) {
+        sprites.ui.draw({
+          x: (x + (BUTTONW - 26) / 2) | 0,
+          y: y + BUTTONH,
+          w: 2, h: 2,
+          frame: 11,
+        });
+      }
+      x += PADDING + BUTTONW;
+    }
+    if (finish) {
+      state.finishLevelUp(choices[state.levelup_choice]);
+    }
+    if (mouse_idx !== levelup_last_mouse_idx) {
+      state.levelup_last_mouse_idx = mouse_idx;
+      state.levelup_choice = mouse_idx;
+    }
+
+    ui.panel({
+      x: HBORDER,
+      y: VBORDER,
+      w: PANELW,
+      h: game_height - VBORDER * 2,
+      color: unit_vec4,
+    });
   }
 
   function test(dt) {
@@ -1411,6 +1802,16 @@ export function main() {
     state.draw();
 
     camera2d.setAspectFixed(game_width, game_height);
+
+    // let p = state.player.pos;
+    // let px = p[0];
+    // let py = p[1];
+    // ui.print(null, 100, 100, 20000, `${state.maze.getTierData(px, py).tier} ` +
+    //   `(${state.maze.getTierData(px, py).dist.toFixed(2)})`);
+
+    if (state.levelup_active) {
+      doLevelUp();
+    }
     drawUI();
     const bg_scale = 1/32;
     sprites.game_bg.draw({
