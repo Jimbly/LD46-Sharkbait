@@ -8,9 +8,6 @@ LD46 Entry by Jimbly - "TBD"
 Start with: `npm start` (after running `npm i` once)
 
 Key systems:
-  level up and upgrades
-    implement visibility
-    radar power-up: exclamation above head (or vis hider turns red?) like levelup-ok message!
   Death
   Progress indication - depth, level, something.  High score?
   Title screen, just a big play button

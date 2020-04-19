@@ -5,6 +5,7 @@ glov_local_storage.storage_prefix = 'ld46'; // Before requiring anything else th
 const assert = require('assert');
 const camera2d = require('./glov/camera2d.js');
 const engine = require('./glov/engine.js');
+const fs = require('fs');
 const glov_font = require('./glov/font.js');
 const input = require('./glov/input.js');
 const { abs, atan2, floor, max, min, sin, sqrt, PI } = Math;
@@ -12,6 +13,7 @@ const perf = require('./glov/perf.js');
 const pico8 = require('./glov/pico8.js');
 const { randCreate } = require('./glov/rand_alea.js');
 // const soundscape = require('./glov/soundscape.js');
+const shaders = require('./glov/shaders.js');
 const glov_sprites = require('./glov/sprites.js');
 const sprite_animation = require('./glov/sprite_animation.js');
 const ui = require('./glov/ui.js');
@@ -40,6 +42,8 @@ Z.DROPS = 9;
 Z.SPRITES = 10;
 // hundreds for sprites here
 Z.DROPS_EARLY = 1100;
+Z.VIS = 1150;
+Z.ELEC = Z.VIS + 2;
 Z.UI = 1200;
 Z.FLOATERS = 2000;
 Z.PARTICLES = 2000;
@@ -58,6 +62,8 @@ let anims = {};
 let origin = vec2(0,0);
 
 let state;
+
+let cutout_shader;
 
 const PIXEL_STRICT = true;
 
@@ -787,6 +793,14 @@ Entity.prototype.impulseFromInput = function (dt) {
   if (engine.DEBUG && input.keyDown(KEYS.SHIFT)) {
     v2scale(this.impulse, this.impulse, 3);
   }
+  if (engine.DEBUG) {
+    if (input.keyDownEdge(KEYS.EQUALS)) {
+      this.vis_pips++;
+    }
+    if (input.keyDownEdge(KEYS.MINUS)) {
+      --this.vis_pips;
+    }
+  }
 };
 const ENTITY_RADIUS = 7;
 const ENT_CHOMP_DIST_SQ = (ENTITY_RADIUS*1.5)*(ENTITY_RADIUS*1.5);
@@ -1201,9 +1215,21 @@ function levelUpOK() {
   return true;
 }
 
+function dangerCheck() {
+  let pos = state.player.pos;
+  for (let ii = 1; ii < state.entities.length; ++ii) {
+    let ent = state.entities[ii];
+    if (ent.visible && v2distSq(pos, ent.pos) < LEVELUP_GUARD_DIST_SQ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+
 const MAX_SPEED = 8;
 const MAX_DAMAGE = 8;
-const MAX_VIS = 5;
+const MAX_VIS = 4;
 GameState.prototype.startLevelUp = function () {
   this.levelup_active = true;
   this.paused = true;
@@ -1389,8 +1415,10 @@ GameState.prototype.draw = function () {
     ent.sprite.draw(param);
     if (ent.electric && ent.elec) {
       param.frame = ent.elec.getFrame();
-      param.z += 0.005;
+      let zsave = param.z;
+      param.z = Z.ELEC;
       ent.sprite.draw(param);
+      param.z = zsave;
     }
     for (let jj = 0; jj < ent.trail.length; ++jj) {
       let tr = ent.trail[jj];
@@ -1403,8 +1431,10 @@ GameState.prototype.draw = function () {
       ent.sprite.draw(param);
       if (ent.electric && ent.elec) {
         param.frame = ent.elec.getFrame();
-        param.z += 0.005;
+        let zsave = param.z;
+        param.z = Z.ELEC;
         ent.sprite.draw(param);
+        param.z = zsave;
       }
     }
   }
@@ -1451,6 +1481,9 @@ export function main() {
   sound_manager = engine.sound_manager;
 
   font = engine.font;
+
+  cutout_shader = shaders.create(gl.FRAGMENT_SHADER, 'cutout',
+    fs.readFileSync(`${__dirname}/shaders/cutout.fp`, 'utf8'));
 
   // Perfect sizes for pixely modes
   ui.scaleSizes(13 / 32);
@@ -1621,6 +1654,20 @@ export function main() {
         times: [250,0],
         loop: false,
       },
+    });
+
+    sprites.vis = {};
+    sprites.vis[50] = createSprite({
+      name: 'vis/512-50',
+    });
+    sprites.vis[75] = createSprite({
+      name: 'vis/512-75',
+    });
+    sprites.vis[100] = createSprite({
+      name: 'vis/512-100',
+    });
+    sprites.vis.solid = createSprite({
+      name: 'vis/solid',
     });
 
     sprites.game_bg = createSprite({
@@ -1868,11 +1915,55 @@ export function main() {
     });
   }
 
+  let color_vis = vec4(0,0,0,1);
+  let color_danger = pico8.colors[8]; // or 8?
+  let vis_param = vec4();
+  shaders.addGlobal('vis_param', vis_param);
+  function drawVis() {
+    let { pos, vis_pips } = state.player;
+    let sprite = sprites.vis[vis_pips === 1 ? 50 : vis_pips === 2 ? 75 : 100];
+    let x = (pos[0] | 0) - 256;
+    let y = (pos[1] | 0) - 256;
+    let z = Z.VIS;
+    let color = color_vis;
+    if (vis_pips >= 4) {
+      if (dangerCheck()) {
+        color = color_danger;
+      }
+    }
+    vis_param[0] = 0.22 + (0.5 + 0.5*sin(engine.global_timer * 0.001)) * 0.10;
+    sprite.draw({
+      x, y, z,
+      w: 512,
+      h: 512,
+      color,
+      shader: cutout_shader,
+    });
+    // bars
+    sprites.vis.solid.draw({
+      x: x - 256,
+      y, z,
+      w: 256,
+      h: 512,
+      color,
+      shader: cutout_shader,
+    });
+    sprites.vis.solid.draw({
+      x: x + 512,
+      y, z,
+      w: 256,
+      h: 512,
+      color,
+      shader: cutout_shader,
+    });
+  }
+
   function test(dt) {
     shiftView(0); // donotcheckin
     state.update(dt);
     shiftView(dt);
     state.draw();
+    drawVis();
 
     camera2d.setAspectFixed(game_width, game_height);
 
