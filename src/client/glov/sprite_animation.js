@@ -1,6 +1,8 @@
 // Portions Copyright 2019 Jimb Esser (https://github.com/Jimbly/)
 // Released under MIT License: https://opensource.org/licenses/MIT
 
+const { floor, random } = Math;
+
 function GlovSpriteAnimation(params) {
   this.frame = 0;
   this.time = 0;
@@ -50,7 +52,11 @@ GlovSpriteAnimation.prototype.setState = function (state, force) {
   }
   this.state = state;
   this.anim = this.data[state];
-  this.time = 0;
+  if (this.anim.init_time) {
+    this.time = floor(random() * this.anim.init_time);
+  } else {
+    this.time = 0;
+  }
   this.anim_idx = 0;
   this.frame = this.anim.frames[this.anim_idx];
   return this;

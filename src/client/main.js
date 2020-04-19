@@ -7,7 +7,7 @@ const camera2d = require('./glov/camera2d.js');
 const engine = require('./glov/engine.js');
 const glov_font = require('./glov/font.js');
 const input = require('./glov/input.js');
-const { abs, atan2, floor, min, round, sin, sqrt, PI } = Math;
+const { abs, atan2, floor, max, min, sin, sqrt, PI } = Math;
 const perf = require('./glov/perf.js');
 const pico8 = require('./glov/pico8.js');
 const { randCreate } = require('./glov/rand_alea.js');
@@ -15,7 +15,7 @@ const { randCreate } = require('./glov/rand_alea.js');
 const glov_sprites = require('./glov/sprites.js');
 const sprite_animation = require('./glov/sprite_animation.js');
 const ui = require('./glov/ui.js');
-const { clamp, defaults, easeOut, lineCircleIntersect, ridx, sign } = require('../common/util.js');
+const { clamp, defaults, easeOut, lerp, lineCircleIntersect, ridx, sign } = require('../common/util.js');
 const {
   vec2,
   v2addScale,
@@ -88,11 +88,18 @@ function floater(opt) {
   floaters.push(opt);
 }
 const FLOATER_TIME = 1000;
-const floater_style = glov_font.style(null, {
-  color: 0xFF0000ff,
-  outline_width: 4,
-  outline_color: 0x000000ff,
-});
+const floater_styles = {
+  enemy: glov_font.style(null, {
+    color: 0xFFFFFFff,
+    outline_width: 4,
+    outline_color: 0x000000ff,
+  }),
+  player: glov_font.style(null, {
+    color: 0x200000ff,
+    outline_width: 4,
+    outline_color: 0xFF0000ff,
+  }),
+};
 function drawFloaters() {
   let now = engine.global_timer;
   for (let ii = floaters.length - 1; ii >= 0; --ii) {
@@ -102,12 +109,18 @@ function drawFloaters() {
       ridx(floaters, ii);
       continue;
     }
-    font.drawSizedAligned(font.styleAlpha(floater_style, 1 - easeOut(progress, 2)),
+    font.drawSizedAligned(font.styleAlpha(floater_styles[fl.style], 1 - easeOut(progress, 2)),
       fl.x, fl.y - easeOut(progress, 2) * 20, Z.FLOATERS, ui.font_height,
       font.ALIGN.HCENTER, 0, 0, fl.text);
   }
 }
 
+let enemy_types = [
+  'eel',
+  'greenfish',
+  'pufferfish',
+  'shark',
+];
 function MazeSegment(sx, sy, sid) {
   rand.reseed(base_seed + sid);
   let connect_left = rand.range(SEG_SIZE - 2) + 1;
@@ -146,7 +159,7 @@ function MazeSegment(sx, sy, sid) {
   while (valid_ent_pos.length) {
     assert(valid_ent_pos.length);
     let idx = rand.range(valid_ent_pos.length);
-    this.entities.push({ pos: valid_ent_pos[idx], type: 'eel' });
+    this.entities.push({ pos: valid_ent_pos[idx], type: enemy_types[rand.range(enemy_types.length)] });
     ridx(valid_ent_pos, idx);
   }
 }
@@ -354,16 +367,17 @@ const CAVE_W = 43 * CAVE_SCALE;
 const CAVE_H = 49 * CAVE_SCALE;
 const CAVE_SKEWY = floor(CAVE_H/2);
 const CAVE_COLOR = pico8.colors[5];
+const DRAW_PAD = 2; // Adding a bunch of extra just to get collision for AI
 Maze.prototype.draw = function () {
   let collision = this.collision = [];
-  let tx0 = floor((origin[0] - CAVE_W) / CAVE_W);
-  let tx1 = floor((origin[0] + game_width + CAVE_W) / CAVE_W) + 1;
+  let tx0 = floor((origin[0] - CAVE_W) / CAVE_W) - DRAW_PAD;
+  let tx1 = floor((origin[0] + game_width + CAVE_W) / CAVE_W) + 1 + DRAW_PAD;
   let z = Z.BACKGROUND + 2;
 
   for (let tx = tx0; tx < tx1; ++tx) {
     let screen_x = tx * CAVE_W;
-    let ty0 = floor((origin[1] + tx * CAVE_SKEWY) / CAVE_H);
-    let ty1 = ty0 + floor(game_height / CAVE_H) + 3;
+    let ty0 = floor((origin[1] + tx * CAVE_SKEWY) / CAVE_H) - DRAW_PAD;
+    let ty1 = ty0 + floor(game_height / CAVE_H) + 3 + DRAW_PAD;
     for (let ty = ty0; ty < ty1; ++ty) {
       let screen_y = ty * CAVE_H - tx * CAVE_SKEWY;
       let bleft = 1 - this.connected(tx, ty, tx, ty+1);
@@ -482,35 +496,88 @@ Maze.prototype.draw = function () {
   }
 };
 
-function cavePosFromWorldPos(out, w) {
-  let tx = round(w[0] / CAVE_W);
-  let ty = round((w[1] + tx * CAVE_SKEWY) / CAVE_H);
-  v2set(out, tx, ty);
-  return out;
-}
+// function cavePosFromWorldPos(out, w) {
+//   let tx = round(w[0] / CAVE_W);
+//   let ty = round((w[1] + tx * CAVE_SKEWY) / CAVE_H);
+//   v2set(out, tx, ty);
+//   return out;
+// }
 
+const ent_stats = {
+  fishball: {
+    hp: 5,
+    damage: 1,
+    speed: vec2(0.032, 0.032),
+    len: 1,
+    head_rot: false,
+    normalize_speed: 1,
+  },
+  eel: {
+    hp: 2,
+    damage: 1,
+    speed: vec2(0.016, 0.016),
+    len: 2,
+    head_rot: false,
+  },
+  greenfish: {
+    hp: 3,
+    damage: 1,
+    speed: vec2(0.016, 0.016),
+    chomp_speed_scale: 10,
+    len: 2,
+    normalize_speed: 1.5,
+  },
+  pufferfish: {
+    hp: 5,
+    damage: 2,
+    speed: vec2(0.008, 0.008),
+    len: 0,
+    head_rot: false,
+  },
+  shark: {
+    hp: 15,
+    damage: 5,
+    speed: vec2(0.064, 0.064),
+    accel: vec2(0.0001, 0.0001),
+    len: 1,
+    min_len: 1,
+    chomp_speed_scale: 4,
+    chomp_radius_scale: 1.5,
+  }
+};
 let last_ent_id = 0;
-function Entity(type, pos, len) {
+function Entity(type, pos) {
   this.id = ++last_ent_id;
+  this.is_player = type === 'fishball';
+  this.impulse_times_dt = !this.is_player;
   if (last_ent_id === 1000) {
     last_ent_id = 0;
   }
   this.type = type;
   this.pos = vec2(pos[0], pos[1]);
   this.vel = vec2(0,0);
-  this.speed = vec2(0.032, 0.032);
   this.accel = vec2(0.001, 0.001);
+  this.head_rot = true;
+  this.rot = 0;
+  this.chomp_speed_scale = 1;
+  this.chomp_radius_scale = 1;
+  this.normalize_speed = 1;
+  let stats = ent_stats[type];
+  for (let key in stats) {
+    this[key] = stats[key];
+  }
   this.impulse = vec2(0,0);
   this.facing = 1;
   this.sprite = sprites[type];
+  this.invincible_until = 0;
   this.head = anims[type].clone().setState('head');
   this.body = anims[type].clone().setState('body');
   this.tail = anims[type].clone().setState('tail');
   this.trail = [];
   let max_dist = 9;
   let norm_dist = 7;
-  let norm = 0.005;
-  for (let ii = 0; ii < len; ++ii) {
+  let norm = 0.005 * this.normalize_speed;
+  for (let ii = 0; ii < this.len; ++ii) {
     this.trail.push({
       pos: this.pos.slice(0),
       type: 'body',
@@ -544,49 +611,105 @@ Entity.prototype.busy = function () {
 Entity.prototype.impulseFromInput = function (dt) {
   this.impulse[0] = 0;
   this.impulse[1] = 0;
-  if (this.busy()) {
-    this.impulse[0] = (1 - this.head.progress()) * this.facing * dt;
-  } else {
-    this.impulse[0] -= input.keyDown(KEYS.LEFT) + input.keyDown(KEYS.A) + input.padButtonDown(PAD.LEFT);
-    this.impulse[0] += input.keyDown(KEYS.RIGHT) + input.keyDown(KEYS.D) + input.padButtonDown(PAD.RIGHT);
-    this.impulse[1] -= input.keyDown(KEYS.UP) + input.keyDown(KEYS.W) + input.padButtonDown(PAD.UP);
-    this.impulse[1] += input.keyDown(KEYS.DOWN) + input.keyDown(KEYS.S) + input.padButtonDown(PAD.DOWN);
-  }
+  this.impulse[0] -= input.keyDown(KEYS.LEFT) + input.keyDown(KEYS.A) + input.padButtonDown(PAD.LEFT);
+  this.impulse[0] += input.keyDown(KEYS.RIGHT) + input.keyDown(KEYS.D) + input.padButtonDown(PAD.RIGHT);
+  this.impulse[1] -= input.keyDown(KEYS.UP) + input.keyDown(KEYS.W) + input.padButtonDown(PAD.UP);
+  this.impulse[1] += input.keyDown(KEYS.DOWN) + input.keyDown(KEYS.S) + input.padButtonDown(PAD.DOWN);
   v2scale(this.impulse, this.impulse, SPEEDSCALE);
   if (engine.DEBUG && input.keyDown(KEYS.SHIFT)) {
     v2scale(this.impulse, this.impulse, 3);
   }
 };
 const ENTITY_RADIUS = 7;
-const ENT_CHOMP_DIST_SQ = (ENTITY_RADIUS*2)*(ENTITY_RADIUS*2);
+const ENT_CHOMP_DIST_SQ = (ENTITY_RADIUS*1.5)*(ENTITY_RADIUS*1.5);
 const CAVE_RADIUS = 10;
 const CAVE_RADIUS_CHECK = ENTITY_RADIUS + CAVE_RADIUS;
-
-function doChomp(ent) {
-  let hit = null;
-  for (let ii = 0; !hit && ii < state.entities.length; ++ii) {
+const INVINCIBILITY_TIME = 500;
+const INVINCIBILITY_TIME_PLAYER = 1000;
+function anyCloser(list, pos, dist_sq) {
+  for (let ii = 0; ii < list.length; ++ii) {
+    if (v2distSq(list[ii], pos) < dist_sq) {
+      return true;
+    }
+  }
+  return false;
+}
+function chompTarget(ent, full_body) {
+  let now = engine.global_timer;
+  let check_pos = [ent.pos];
+  if (full_body) {
+    for (let ii = 0; ii < ent.trail.length - 1; ++ii) {
+      check_pos.push(ent.trail[ii].pos);
+    }
+  }
+  let dist = ENT_CHOMP_DIST_SQ * ent.chomp_radius_scale * ent.chomp_radius_scale;
+  // ui.drawCircle(ent.pos[0], ent.pos[1], 1000, sqrt(dist), 1, vec4(1,1,1,0.5));
+  for (let ii = 0; ii < state.entities.length; ++ii) {
     let target = state.entities[ii];
-    if (target.type === ent.type || !target.visible) {
+    if (target.type === ent.type || !target.visible || target.is_player === ent.is_player) {
       continue;
     }
-    if (v2distSq(ent.pos, target.pos) < ENT_CHOMP_DIST_SQ) {
-      hit = target;
-      break;
+    if (now < target.invincible_until) {
+      continue;
     }
-    for (let jj = 0; jj < target.trail.length - 1; ++jj) {
+    if (anyCloser(check_pos, target.pos, dist)) {
+      return target;
+    }
+    for (let jj = 0; jj < target.trail.length; ++jj) {
       let tr = target.trail[jj];
-      if (v2distSq(ent.pos, tr.pos) < ENT_CHOMP_DIST_SQ) {
-        hit = target;
-        break;
+      // Just head, or tail here too?
+      if (v2distSq(ent.pos, tr.pos) < dist) {
+        return target;
       }
     }
   }
+  return null;
+}
+function wouldChomp(ent, full_body) {
+  return chompTarget(ent, full_body);
+}
+function doChomp(ent, full_body) {
+  let hit = chompTarget(ent, full_body);
+  let is_player = ent === state.player;
   if (hit) {
-    floater({ x: hit.pos[0], y: hit.pos[1], text: '-1' });
+    let now = engine.global_timer;
+    let damage = ent.damage;
+    let hit_player = !is_player;
+    floater({ x: hit.pos[0], y: hit.pos[1], text: `-${damage}`, style: hit_player ? 'player' : 'enemy' });
+    hit.hp -= damage;
+    hit.invincible_until = now + (hit_player ? INVINCIBILITY_TIME_PLAYER : INVINCIBILITY_TIME);
+    hit.head.setState('ow');
+    if (hit_player) {
+      // detect death, game over
+    } else {
+      if (hit.hp <= 0) {
+        let idx = state.entities.indexOf(hit);
+        ridx(state.entities, idx);
+      } else {
+        // Remove a bit of the tail
+        if (hit.trail.length > 1 && (!hit.min_len || hit.trail.length > hit.min_len + 1)) {
+          ridx(hit.trail, hit.trail.length - 2);
+        }
+      }
+    }
     sound_manager.play('button_click');
-  } else {
+  } else if (is_player) {
     sound_manager.play('rollover');
   }
+}
+
+function blendRot(weight, a, b) {
+  if (b > a && b - a > PI) {
+    a += PI * 2;
+  }
+  if (a > b && a - b > PI) {
+    b += PI * 2;
+  }
+  let ret = lerp(weight, a, b);
+  if (ret > PI * 2) {
+    ret -= PI * 2;
+  }
+  return ret;
 }
 
 Entity.prototype.update = (function () {
@@ -594,7 +717,6 @@ Entity.prototype.update = (function () {
   let norm_pos = vec2();
   let tr_delta = vec2();
   let start_pos = vec2();
-  let start_cpos = vec2();
   let test = vec2();
   function colUnBlocked(dest) {
     if (v2same(start_pos, dest)) {
@@ -613,11 +735,21 @@ Entity.prototype.update = (function () {
     return true;
   }
   return function entityUpdate(dt) {
-    cavePosFromWorldPos(start_cpos, this.pos);
+    if (this.busy()) {
+      v2set(this.impulse, 0, 0);
+      if (this.head.state === 'chomp') {
+        this.impulse[0] = (1 - this.head.progress()) * this.facing * (this.impulse_times_dt ? 1 : dt) *
+          this.chomp_speed_scale;
+      }
+    }
+
     v2copy(start_pos, this.pos);
     for (let ii = 0; ii < 2; ++ii) {
       let max_dv = dt * this.accel[ii];
       let imp = this.impulse[ii];
+      if (this.impulse_times_dt) {
+        imp *= dt;
+      }
       if (abs(imp) < 1) {
         imp = 0;
       }
@@ -674,12 +806,21 @@ Entity.prototype.update = (function () {
     } else if (this.pos[0] < start_pos[0]) {
       this.facing = -1;
     }
+
+    v2sub(tr_delta, start_pos, this.pos);
+    let len = sqrt(v2lengthSq(tr_delta));
+    if (len > 0.01) {
+      let new_rot = atan2(tr_delta[0], -tr_delta[1]) + PI/2;
+      let weight = len / 10;
+      this.rot = blendRot(clamp(weight, 0, 1), this.rot, new_rot);
+    }
+
     v2copy(last_pos, this.pos);
     let { trail } = this;
     for (let ii = 0; ii < trail.length; ++ii) {
       let tr = trail[ii];
       v2sub(tr_delta, tr.pos, last_pos);
-      let len = sqrt(v2lengthSq(tr_delta));
+      len = sqrt(v2lengthSq(tr_delta));
       if (len > 0.01) {
         tr.rot = atan2(tr_delta[0], -tr_delta[1]) + PI/2;
       }
@@ -704,22 +845,87 @@ Entity.prototype.update = (function () {
     }
 
     let is_chomp = this.head.state === 'chomp';
+    let csp = anims[this.type].chomp_start_progress;
     let cfp = anims[this.type].chomp_finish_progress;
-    let was_finished = is_chomp && this.head.progress() >= cfp;
+    let was_finished = is_chomp && this.chomp_finished;
     this.head.update(dt);
-    let is_finished = is_chomp && (!this.head.state || this.head.progress() >= cfp);
-    if (is_chomp && !was_finished && is_finished) {
-      // Look for anyone to eat
-      doChomp(this);
+    if (is_chomp && !was_finished) {
+      let progress = this.head.state && this.head.progress();
+      let is_finished = !this.head.state || progress >= cfp;
+      if (!is_finished && progress > csp && wouldChomp(this)) {
+        is_finished = true;
+      }
+      if (is_finished) {
+        this.chomp_finished = true;
+        // Look for anyone to eat
+        doChomp(this, false);
+      }
     }
     this.body.update(dt);
     this.tail.update(dt);
+    if (this.elec && this.electric) {
+      this.elec.update(dt);
+    }
   };
 }());
+let chomp_finish = vec2();
+const TRY_CHOMP_DIST = 18;
+Entity.prototype.tryChompPlayer = function () {
+  // Is any part of the player in the area in front of us?
+  let chomp_start = this.pos;
+  chomp_finish[1] = this.pos[1];
+  chomp_finish[0] = this.pos[0] + this.facing * TRY_CHOMP_DIST;
+  if (!lineCircleIntersect(chomp_start, chomp_finish, state.player.pos,
+    ENTITY_RADIUS * 1.5 * this.chomp_radius_scale)
+  ) {
+    return false;
+  }
+  this.chomp_finished = false;
+  this.head.setState('chomp');
+  return true;
+};
 Entity.prototype.updateAI = function (dt) {
+  if (this.busy()) {
+    v2set(this.impulse, 0, 0);
+    this.electric = false;
+    return;
+  }
+
   if (this.type === 'eel') {
-    this.impulse[0] = sign(sin(engine.global_timer * 0.0007 + this.seed * PI * 2)) * dt * 0.5;
-    this.impulse[1] = sin(engine.global_timer * 0.003 + this.seed * 77 * PI * 2) * dt * 0.5;
+    this.impulse[0] = sign(sin(engine.global_timer * 0.0007 + this.seed * PI * 2));
+    this.impulse[1] = sin(engine.global_timer * 0.003 + this.seed * 77 * PI * 2);
+    this.electric = sin(engine.global_timer * 0.001 + this.seed * 107 * PI * 2) > 0.66;
+  } else if (this.type === 'greenfish') {
+    if (!this.tryChompPlayer()) {
+      if (!this.bored_time) {
+        this.bored_time = 3000 + rand.range(5000);
+        this.impulse[0] = rand.random() * 2 - 1;
+        this.impulse[1] = rand.random() * 2 - 1;
+      } else {
+        this.bored_time = max(0, this.bored_time - dt);
+      }
+    }
+  } else if (this.type === 'pufferfish') {
+    this.electric = true;
+    if (!this.bored_time) {
+      this.bored_time = 3000 + rand.range(5000);
+      this.impulse[0] = rand.random() * 2 - 1;
+    } else {
+      this.bored_time = max(0, this.bored_time - dt);
+    }
+    this.impulse[1] = sin(engine.global_timer * 0.0015 + this.seed * 77 * PI * 2) * 0.5;
+  } else if (this.type === 'shark') {
+    if (!this.tryChompPlayer()) {
+      this.impulse[0] = sign(sin(engine.global_timer * 0.001 + this.seed * PI * 2));
+      this.impulse[1] = sin(engine.global_timer * 0.0001 + this.seed * 77 * PI * 2) * 0.25;
+    }
+  }
+
+  if (this.electric) {
+    if (!this.elec && this.type === 'eel') {
+      this.elec = anims[this.type].clone().setState('elec');
+    }
+    doChomp(this, true);
   }
 };
 
@@ -730,8 +936,8 @@ function nearScreen(pos) {
 
 function GameState() {
   this.entities = [];
-  this.player = new Entity('fishball', [290,140], 1);
-  this.player.id = 9e9;
+  this.player = new Entity('fishball', [290,140]);
+  this.player.id = 1001;
   origin[0] = this.player.pos[0] - game_width / 2;
   origin[1] = this.player.pos[1] - game_height / 2;
   this.entities.push(this.player);
@@ -742,6 +948,7 @@ function actionDown() {
 }
 GameState.prototype.update = function (dt) {
   if (!this.player.busy() && actionDown()) {
+    this.player.chomp_finished = false;
     this.player.head.setState('chomp');
   }
   this.player.impulseFromInput(dt);
@@ -758,8 +965,9 @@ GameState.prototype.update = function (dt) {
   }
 };
 GameState.prototype.addEnt = function (data) {
-  let ent = new Entity(data.type, data.pos, 2);
+  let ent = new Entity(data.type, data.pos);
   ent.seed = rand.random();
+  ent.facing = rand.range(2) * 2 - 1;
   this.entities.push(ent);
 };
 GameState.prototype.addEnts = function (sx, sy, ents) {
@@ -792,23 +1000,34 @@ GameState.prototype.draw = function () {
     }
     ++num_ents;
     let z = Z.SPRITES + ent.id * 0.1;
-    ent.sprite.draw({
+    let param = {
       x: floor(ent.pos[0]),
       y: floor(ent.pos[1]),
       w: ent.facing,
       z,
       frame: ent.head.getFrame(),
-    });
+      rot: ent.head_rot ? ent.facing === 1 ? ent.rot : ent.rot + PI : 0,
+    };
+    ent.sprite.draw(param);
+    if (ent.electric && ent.elec) {
+      param.frame = ent.elec.getFrame();
+      param.z += 0.005;
+      ent.sprite.draw(param);
+    }
     for (let jj = 0; jj < ent.trail.length; ++jj) {
       let tr = ent.trail[jj];
-      ent.sprite.draw({
-        x: floor(tr.pos[0]),
-        y: floor(tr.pos[1]),
-        w: tr.facing,
-        z: z - (jj + 1)*0.01,
-        frame: ent[tr.type].getFrame(),
-        rot: tr.facing === 1 ? tr.rot : tr.rot + PI,
-      });
+      param.x = floor(tr.pos[0]);
+      param.y = floor(tr.pos[1]);
+      param.w = tr.facing;
+      param.z -= 0.01;
+      param.frame = ent[tr.type].getFrame();
+      param.rot = tr.facing === 1 ? tr.rot : tr.rot + PI;
+      ent.sprite.draw(param);
+      if (ent.electric && ent.elec) {
+        param.frame = ent.elec.getFrame();
+        param.z += 0.005;
+        ent.sprite.draw(param);
+      }
     }
   }
 
@@ -841,32 +1060,6 @@ export function main() {
     const createSprite = glov_sprites.create;
     const createAnimation = sprite_animation.create;
 
-    sprites.fishball = createSprite({
-      name: 'fishball',
-      ws: [13, 13, 13],
-      hs: [13, 13, 13],
-      size: vec2(sprite_size, sprite_size),
-      origin: vec2(6/13, 6/13),
-    });
-    anims.fishball = createAnimation({
-      head: {
-        frames: [0,1],
-        times: [200, 200],
-      },
-      body: {
-        frames: [2,3],
-        times: [200, 200],
-      },
-      tail: {
-        frames: [4,5],
-        times: [200, 200],
-      },
-      chomp: {
-        frames: [6,7,8,0],
-        times: [80,130,400,0],
-        loop: false,
-      },
-    });
     function chompFinishProgress(anim) {
       let chomp = anim.data.chomp;
       let sum = 0;
@@ -877,32 +1070,149 @@ export function main() {
       for (let ii = 0; ii < chomp.times.length - 2; ++ii) {
         windup += chomp.times[ii];
       }
+      anim.chomp_start_progress = chomp.times[0] / sum;
       anim.chomp_finish_progress = windup / sum;
     }
+    sprites.fishball = createSprite({
+      name: 'fishball',
+      ws: [13, 13, 13],
+      hs: [13, 13, 13, 13],
+      size: vec2(sprite_size, sprite_size),
+      origin: vec2(6/13, 6/13),
+    });
+    anims.fishball = createAnimation({
+      head: {
+        frames: [0,1],
+        times: [200, 200],
+        init_time: 400,
+      },
+      body: {
+        frames: [2,3],
+        times: [300, 200],
+        init_time: 400,
+      },
+      tail: {
+        frames: [4,5],
+        times: [230, 230],
+        init_time: 400,
+      },
+      chomp: {
+        frames: [6,7,8,0],
+        times: [80,130,400,0],
+        loop: false,
+      },
+      ow: { // also how long we're stunned upon hit
+        frames: [9,0],
+        times: [400,0],
+        loop: false,
+      },
+    });
     chompFinishProgress(anims.fishball);
+
+    sprites.greenfish = createSprite({
+      name: 'greenfish',
+      ws: [13, 13, 13],
+      hs: [13, 13, 13, 13],
+      size: vec2(sprite_size, sprite_size),
+      origin: vec2(6/13, 6/13),
+    });
+    anims.greenfish = anims.fishball;
+
+    sprites.pufferfish = createSprite({
+      name: 'pufferfish',
+      ws: [13, 13],
+      hs: [13, 13, 13],
+      size: vec2(sprite_size, sprite_size),
+      origin: vec2(6/13, 6/13),
+    });
+    anims.pufferfish = createAnimation({
+      head: {
+        frames: [0,1],
+        times: [5000,200],
+        init_time: 5000,
+      },
+      body: {
+        frames: [2],
+        times: [200],
+      },
+      tail: {
+        frames: [2,3],
+        times: [300,200],
+      },
+      ow: {
+        frames: [4,0],
+        times: [250,0],
+        loop: false,
+      },
+    });
+
+    sprites.shark = createSprite({
+      name: 'shark',
+      ws: [25, 25, 25],
+      hs: [25, 25, 25, 25],
+      size: vec2(25, 25),
+      origin: vec2(12/25, 12/25),
+    });
+    anims.shark = createAnimation({
+      head: {
+        frames: [0,1],
+        times: [5000,200],
+        init_time: 5000,
+      },
+      body: {
+        frames: [2,3],
+        times: [400,100],
+      },
+      tail: {
+        frames: [4,5],
+        times: [300,200],
+      },
+      chomp: {
+        frames: [6,7,8,0],
+        times: [280,130,400,0],
+        loop: false,
+      },
+      ow: {
+        frames: [9,0],
+        times: [250,0],
+        loop: false,
+      },
+    });
+    chompFinishProgress(anims.shark);
+
     sprites.eel = createSprite({
       name: 'eel',
-      ws: [13, 13],
-      hs: [13, 13],
+      ws: [13, 13, 13],
+      hs: [13, 13, 13, 13],
       size: vec2(sprite_size, sprite_size),
       origin: vec2(6/13, 6/13),
     });
     anims.eel = createAnimation({
       head: {
-        frames: [0],
-        times: [200],
+        frames: [0,1],
+        times: [5000,200],
+        init_time: 5000,
       },
       body: {
-        frames: [1],
+        frames: [2],
         times: [200],
       },
       tail: {
-        frames: [2],
-        times: [200],
+        frames: [3,4,5,4],
+        times: [400,200,400,200],
       },
       chomp: {
         frames: [3,0],
         times: [80,1],
+        loop: false,
+      },
+      elec: {
+        frames: [6,7,8],
+        times: [80,80,80],
+      },
+      ow: {
+        frames: [9,0],
+        times: [250,0],
         loop: false,
       },
     });
@@ -963,6 +1273,7 @@ export function main() {
   }
 
   function test(dt) {
+    shiftView(0); // donotcheckin
     state.update(dt);
     shiftView(dt);
     state.draw();

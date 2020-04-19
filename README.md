@@ -8,8 +8,9 @@ LD46 Entry by Jimbly - "TBD"
 Start with: `npm start` (after running `npm i` once)
 
 Key systems:
-  Enemies to eat/fight/avoid
   HP + XP + upgrades
+  spawn harder enemies based on level and/or distance from origin?
+  Death
   Progress indication - depth, level, something.  High score?
 
 Art:
