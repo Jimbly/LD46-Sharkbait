@@ -1978,12 +1978,14 @@ export function main() {
     }
     drawUI();
     const bg_scale = 1/32;
+    const origin_speed_scale = 0.75;
     sprites.game_bg.draw({
       x: 0, y: 0, z: Z.BACKGROUND,
       w: game_width,
       h: game_height,
-      uvs: vec4(origin_int[0]*bg_scale,origin_int[1]*bg_scale,
-        (origin_int[0] + game_width)*bg_scale, (origin_int[1] + game_height)*bg_scale),
+      uvs: vec4(origin_int[0]*bg_scale*origin_speed_scale,origin_int[1]*bg_scale*origin_speed_scale,
+        (origin_int[0]*origin_speed_scale + game_width)*bg_scale,
+        (origin_int[1]*origin_speed_scale + game_height)*bg_scale),
       //color: pico8.colors[1],
     });
   }
