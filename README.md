@@ -9,9 +9,6 @@ Start with: `npm start` (after running `npm i` once)
 
 Key systems:
   level up and upgrades
-    too much healing
-    first shark should be earlier, so people see it
-    implement speed (also affect acceleration/handling?)
     implement visibility
     radar power-up: exclamation above head (or vis hider turns red?) like levelup-ok message!
   Death
@@ -19,6 +16,8 @@ Key systems:
   Title screen, just a big play button
   Something non-deadly to search for and find, perhaps with a cue as to where it is?  One per segment, not on traced route?
 
+Balance:
+  first shark should be earlier, so people see it
 
 Art:
   background:

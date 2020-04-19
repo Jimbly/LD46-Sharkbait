@@ -639,7 +639,7 @@ Maze.prototype.draw = function () {
 // }
 
 function xpForLevel(level) {
-  return 10 + (level - 1);
+  return 10 + (level - 1) * 5;
 }
 
 let last_action_time = 0;
@@ -647,8 +647,9 @@ let last_action_time = 0;
 const ent_stats = {
   fishball: {
     hp: 6,
-    damage: 1, // engine.DEBUG ? 10 : 1,
-    speed: vec2(0.032, 0.032),
+    speed: vec2(0.016, 0.016),
+    speed_base: vec2(0.016, 0.016),
+    speed_inc: vec2(0.006, 0.006),
     len: 1,
     head_rot: false,
     normalize_speed: 1,
@@ -666,6 +667,8 @@ const ent_stats = {
     speed: vec2(0.016, 0.016),
     len: 2,
     head_rot: false,
+    drop_hp: 1,
+    drop_xp: 2,
   },
   greenfish: {
     hp: 3,
@@ -674,6 +677,8 @@ const ent_stats = {
     chomp_speed_scale: 10,
     len: 2,
     normalize_speed: 1.5,
+    drop_hp: 1,
+    drop_xp: 3,
   },
   pufferfish: {
     hp: 5,
@@ -681,6 +686,8 @@ const ent_stats = {
     speed: vec2(0.008, 0.008),
     len: 0,
     head_rot: false,
+    drop_hp: 5,
+    drop_xp: 1,
   },
   shark: {
     hp: 15,
@@ -691,6 +698,8 @@ const ent_stats = {
     min_len: 1,
     chomp_speed_scale: 4,
     chomp_radius_scale: 1.5,
+    drop_hp: 15,
+    drop_xp: 10,
   }
 };
 let last_ent_id = 0;
@@ -757,6 +766,9 @@ Entity.prototype.busy = function (any) {
   return false;
 };
 Entity.prototype.impulseFromInput = function (dt) {
+  v2addScale(this.speed, this.speed_base, this.speed_inc, this.speed_pips - 1);
+  this.damage = this.damage_pips;
+
   this.impulse[0] = 0;
   this.impulse[1] = 0;
   this.impulse[0] -= input.keyDown(KEYS.LEFT) + input.keyDown(KEYS.A) + input.padButtonDown(PAD.LEFT);
@@ -841,6 +853,8 @@ function doPickup(player, drop) {
     }, 500);
   }
 }
+let player_damage_at = 0;
+let player_damage_count = 0;
 function doChomp(ent, full_body) {
   let hit = chompTarget(ent, full_body);
   let is_player = ent === state.player;
@@ -858,6 +872,10 @@ function doChomp(ent, full_body) {
     let now = engine.global_timer;
     let damage = ent.damage;
     let hit_player = !is_player;
+    if (hit_player) {
+      player_damage_at = now;
+      player_damage_count++;
+    }
     floater({ x: hit.pos[0], y: hit.pos[1], text: `${hit_player?'-':''}${damage}`,
       style: hit_player ? 'player' : 'enemy' });
     hit.hp -= damage;
@@ -871,7 +889,8 @@ function doChomp(ent, full_body) {
         ridx(state.entities, idx);
         state.drops.push({
           pos: hit.pos.slice(0),
-          x: hit.pos[0], y: hit.pos[1], hp: hit.max_hp, frame: 10, z: Z.DROPS_EARLY, xp: hit.max_hp,
+          x: hit.pos[0], y: hit.pos[1], hp: hit.drop_hp || hit.max_hp,
+          frame: 10, z: Z.DROPS_EARLY, xp: hit.drop_xp || hit.max_hp,
         });
       } else {
         // Remove a bit of the tail
@@ -1182,8 +1201,8 @@ function levelUpOK() {
   return true;
 }
 
-const MAX_SPEED = Infinity;
-const MAX_DAMAGE = Infinity;
+const MAX_SPEED = 8;
+const MAX_DAMAGE = 8;
 const MAX_VIS = 5;
 GameState.prototype.startLevelUp = function () {
   this.levelup_active = true;
@@ -1206,7 +1225,7 @@ GameState.prototype.startLevelUp = function () {
   for (let ii = 0; ii < choices.length; ++ii) {
     tot += choices[ii].w;
   }
-  rand.reseed(player.level * 777 + base_seed);
+  rand.reseed(player.level * 777 + base_seed + 6);
   this.levelup_choices = [];
   this.levelup_choice = -1;
   this.levelup_last_mouse_idx = -1;
@@ -1223,33 +1242,39 @@ GameState.prototype.startLevelUp = function () {
     self.levelup_choices.push(choices[idx]);
     ridx(choices, idx);
   }
-  chooseOne();
-  chooseOne();
+  if (choices.length) {
+    chooseOne();
+  }
+  if (choices.length) {
+    chooseOne();
+  }
 };
 GameState.prototype.finishLevelUp = function (choice) {
   let { player } = this;
   this.levelup_active = false;
   this.paused = false;
-  floater({ x: player.pos[0], y: player.pos[1], text: '', style: 'xp', icon: choice.frame });
   player.level++;
   player.xp -= player.xp_for_level;
   player.xp_for_level = xpForLevel(player.level);
-  switch (choice.type) {
-    case 'speed':
-      ++player.speed_pips;
-      break;
-    case 'vis':
-      ++player.vis_pips;
-      break;
-    case 'damage':
-      ++player.damage_pips;
-      ++player.damage;
-      break;
-    case 'hp':
-      player.max_hp += 2;
-      break;
-    default:
-      assert(0);
+  if (choice) {
+    floater({ x: player.pos[0], y: player.pos[1], text: '', style: 'xp', icon: choice.frame });
+    switch (choice.type) {
+      case 'speed':
+        ++player.speed_pips;
+        break;
+      case 'vis':
+        ++player.vis_pips;
+        break;
+      case 'damage':
+        ++player.damage_pips;
+        break;
+      case 'hp':
+        player.max_hp += 2;
+        ++player.hp_pips;
+        break;
+      default:
+        assert(0);
+    }
   }
   let dhp = player.max_hp - player.hp;
   if (dhp) {
@@ -1262,12 +1287,18 @@ GameState.prototype.finishLevelUp = function (choice) {
 GameState.prototype.update = function (dt) {
   // Player
   let player = this.player;
+  this.player.impulseFromInput(dt);
   if (!state.paused && !player.busy(true)) {
     if (levelUpOK()) {
       this.startLevelUp();
       // ui.print(null, player.pos[0], player.pos[1], 10000, 'Level-up OK');
     }
     if (!this.paused && actionDown()) {
+      if (player.impulse[0] < -0.1) {
+        player.facing = -1;
+      } else if (player.impulse[0] > 0.1) {
+        player.facing = 1;
+      }
       player.chomp_finished = false;
       player.head.setState('chomp');
     }
@@ -1285,7 +1316,6 @@ GameState.prototype.update = function (dt) {
       });
     }
   }
-  this.player.impulseFromInput(dt);
 
   // General
   if (!this.paused) {
@@ -1598,6 +1628,8 @@ export function main() {
     });
     sprites.header = createSprite({
       name: 'header',
+      ws: [320],
+      hs: [15, 15, 15, 15],
     });
     sprites.ui = createSprite({
       name: 'ui',
@@ -1670,17 +1702,29 @@ export function main() {
   const VALUE_WIDTH = 10;
   const POS_SPEED = POS_DAMAGE + 14 + VALUE_WIDTH + POS_PAD;
   const POS_VIS = POS_SPEED + 14 + VALUE_WIDTH + POS_PAD;
-  const POS_XP = POS_VIS + 14 + VALUE_WIDTH + POS_PAD;
+  const POS_XP = POS_VIS + 14 + VALUE_WIDTH + POS_PAD - 8;
   const POS_TIER = POS_XP + 14 + VALUE_WIDTH + POS_PAD + 28;
   function drawUI() {
+    let time_since_damage = 0;
+    let header_frame = min(player_damage_count, 2);
+    if (player_damage_at) {
+      time_since_damage = engine.global_timer - player_damage_at;
+      if (time_since_damage < 500) {
+        if ((time_since_damage % 250) < 125) {
+          header_frame = 3;
+        }
+      }
+    }
     sprites.header.draw({
       x: 0, y: 0, z: Z.UI - 1,
       w: game_width,
       h: 15,
+      frame: header_frame,
     });
     let y = 1;
     let z = Z.UI;
-    let { hp, max_hp, damage, speed_pips, xp, xp_for_level, level, vis_pips } = state.player;
+    let { hp, max_hp, xp, xp_for_level, level } = state.player;
+    // let { hdamage, speed_pips, vis_pips } = state.player;
     let blink = hp <= 3;
     for (let ii = 0; ii < max_hp / 2; ++ii) {
       let pos = POS_HP + ii * 14;
@@ -1695,33 +1739,36 @@ export function main() {
       sprites.ui.draw({ x: pos, y, z, frame });
     }
 
-    sprites.ui.draw({ x: POS_DAMAGE, y, z, frame: 7 });
+    // sprites.ui.draw({ x: POS_DAMAGE, y, z, frame: 7 });
+    // ui.print(style_status, POS_DAMAGE + 16 + 2, y+3, z, `${damage}`);
 
-    sprites.ui.draw({ x: POS_SPEED, y, z, frame: 6 });
+    // sprites.ui.draw({ x: POS_SPEED, y, z, frame: 6 });
+    // ui.print(style_status, POS_SPEED + 16 + 1, y+3, z, `${speed_pips}`);
 
-    sprites.ui.draw({ x: POS_VIS, y, z, frame: 8 });
+    // sprites.ui.draw({ x: POS_VIS, y, z, frame: 8 });
+    // ui.print(style_status, POS_VIS + 16, y+3, z, `${vis_pips}`);
 
     sprites.ui.draw({ x: POS_TIER, y, z, frame: 13 });
-
-    sprites.ui.draw({ x: POS_XP, y, z, frame: 5 });
-    y += 3;
-    ui.print(style_status, POS_DAMAGE + 16 + 2, y, z, `${damage}`);
-    ui.print(style_status, POS_SPEED + 16 + 1, y, z, `${speed_pips}`);
-    ui.print(style_status, POS_VIS + 16, y, z, `${vis_pips}`);
-
     let p = state.player.pos;
     let px = p[0];
     let py = p[1];
     let tier_data = state.maze.getTierData(px, py);
-    ui.print(style_status, POS_TIER + 16, y, z, `${floor(tier_data.dist) + 1}`);
-    font.drawSizedAligned(style_status, POS_XP + 7, y, z + 1, ui.font_height, font.ALIGN.HCENTER,
+    ui.print(style_status, POS_TIER + 16, y+3, z, `${floor(tier_data.dist) + 1}`);
+
+    sprites.ui.draw({ x: POS_XP, y, z, frame: 5 });
+    font.drawSizedAligned(style_status, POS_XP + 7, y+3, z + 1, ui.font_height, font.ALIGN.HCENTER,
       0, 0, `${level}`);
-    ui.print(style_status_xp, POS_XP + 16 + 1, y, z, `${xp}/${xp_for_level}`);
+    ui.print(style_status_xp, POS_XP + 16 + 1, y+3, z, `${xp}/${xp_for_level}`);
   }
 
   function doLevelUp() {
     let { player, levelup_last_mouse_idx } = state;
+    let { max_hp, damage, damage_pips, speed_pips, vis_pips, level } = player;
     let choices = state.levelup_choices;
+    if (!choices.length) {
+      state.finishLevelUp(null);
+      return;
+    }
     let VBORDER = 30;
     let PADDING = 10;
     let BUTTON_SCALE = 5;
@@ -1745,12 +1792,16 @@ export function main() {
       state.levelup_choice = 0;
     }
     if (input.keyDownEdge(KEYS.D) || input.keyDownEdge(KEYS.RIGHT) || input.padButtonDownEdge(PAD.RIGHT)) {
-      state.levelup_choice = 1;
+      state.levelup_choice = choices.length - 1;
     }
-    font.drawSized(style_levelup_title, game_width / 2 + 4, y, z, title_size, `${player.level + 1}`);
-    y += title_size + 20;
+    font.drawSized(style_levelup_title, game_width / 2 + 4, y, z, title_size, `${level + 1}`);
+    y += title_size + 16;
     let mouse_idx = -1;
     let finish = false;
+    let x0 = x;
+    if (choices.length === 1) {
+      x += (BUTTONW + PADDING) / 2;
+    }
     for (let ii = 0; ii < choices.length; ++ii) {
       let choice = choices[ii];
       let selected = state.levelup_choice === ii;
@@ -1785,6 +1836,28 @@ export function main() {
       state.levelup_last_mouse_idx = mouse_idx;
       state.levelup_choice = mouse_idx;
     }
+
+    // show current status
+    y += BUTTONH + PADDING + 16;
+
+    const POS_PAD2 = 48;
+    x = x0 + 8;
+
+    sprites.ui.draw({ x, y, z, frame: 9 });
+    ui.print(style_status, x + 16 + 2, y+3, z, `${(max_hp === MAX_HP) ? '!!!' : max_hp/2}`);
+    x += POS_PAD2;
+
+    sprites.ui.draw({ x, y, z, frame: 7 });
+    ui.print(style_status, x + 16 + 2, y+3, z, `${(damage_pips === MAX_DAMAGE) ? '!!!' : damage}`);
+    x += POS_PAD2;
+
+    sprites.ui.draw({ x, y, z, frame: 6 });
+    ui.print(style_status, x + 16 + 1, y+3, z, `${(speed_pips === MAX_SPEED) ? '!!!' : speed_pips}`);
+    x += POS_PAD2;
+
+    sprites.ui.draw({ x, y, z, frame: 8 });
+    ui.print(style_status, x + 16, y+3, z, `${(vis_pips === MAX_VIS) ? '!!!' : vis_pips}`);
+    x += POS_PAD2;
 
     ui.panel({
       x: HBORDER,
