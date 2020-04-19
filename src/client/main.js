@@ -88,9 +88,12 @@ function lineLineIntersect(out, p1, p2, p3, p4) {
 }
 
 const style_status = glov_font.style(null, {
-  color: 0xFFFFFFff,
-  outline_width: 4,
-  outline_color: 0x000000ff,
+  color: pico8.font_colors[7],
+  outline_width: 5,
+  outline_color: pico8.font_colors[0],
+});
+const style_status_xp = glov_font.style(style_status, {
+  color: pico8.font_colors[10],
 });
 
 let floaters = [];
@@ -98,17 +101,27 @@ function floater(opt) {
   opt.time = engine.global_timer;
   floaters.push(opt);
 }
-const FLOATER_TIME = 1000;
+const FLOATER_TIME = 1500;
 const floater_styles = {
   enemy: glov_font.style(null, {
-    color: 0xFFFFFFff,
-    outline_width: 4,
-    outline_color: 0x000000ff,
+    color: pico8.font_colors[7],
+    outline_width: 5,
+    outline_color: pico8.font_colors[0],
   }),
   player: glov_font.style(null, {
-    color: 0x200000ff,
-    outline_width: 4,
-    outline_color: 0xFF0000ff,
+    color: pico8.font_colors[2],
+    outline_width: 5,
+    outline_color: pico8.font_colors[8],
+  }),
+  xp: glov_font.style(null, {
+    color: pico8.font_colors[10],
+    outline_width: 5,
+    outline_color: pico8.font_colors[0],
+  }),
+  hp: glov_font.style(null, {
+    color: pico8.font_colors[11],
+    outline_width: 5,
+    outline_color: pico8.font_colors[0],
   }),
 };
 function drawFloaters() {
@@ -120,7 +133,7 @@ function drawFloaters() {
       ridx(floaters, ii);
       continue;
     }
-    font.drawSizedAligned(font.styleAlpha(floater_styles[fl.style], 1 - easeOut(progress, 2)),
+    font.drawSizedAligned(font.styleAlpha(floater_styles[fl.style], easeOut(1 - progress, 2)),
       fl.x, fl.y - easeOut(progress, 2) * 20, Z.FLOATERS, ui.font_height,
       font.ALIGN.HCENTER, 0, 0, fl.text);
   }
@@ -516,15 +529,16 @@ Maze.prototype.draw = function () {
 
 const ent_stats = {
   fishball: {
-    hp: 6,
-    damage: 1,
+    hp: MAX_HP,
+    damage: 1, // engine.DEBUG ? 10 : 1,
     speed: vec2(0.032, 0.032),
     len: 1,
     head_rot: false,
     normalize_speed: 1,
     speed_pips: 1,
-    xp: 0,
     vis_pips: 1,
+    hp_pips: 1,
+    xp: 0,
   },
   eel: {
     hp: 2,
@@ -684,10 +698,14 @@ function wouldChomp(ent, full_body) {
   return chompTarget(ent, full_body);
 }
 function doPickup(player, drop) {
+  let old_hp = player.hp;
   player.hp = min(player.hp + drop.hp, player.max_hp);
+  let dhp = player.hp - old_hp;
   player.xp += drop.xp;
   player.head.setState('happy');
   sound_manager.play('button_click');
+  floater({ x: drop.x - 8, y: drop.y, text: `+${drop.xp}`, style: 'xp' });
+  floater({ x: drop.x + 8, y: drop.y, text: `+${dhp}`, style: 'hp' });
 }
 function doChomp(ent, full_body) {
   let hit = chompTarget(ent, full_body);
@@ -1383,7 +1401,7 @@ export function main() {
     ui.print(style_status, POS_DAMAGE + 16 + 2, y, z, `${damage}`);
     ui.print(style_status, POS_SPEED + 16 + 1, y, z, `${speed_pips}`);
     // ui.print(style_status, POS_VIS + 16, y, z, `${vis_pips}`);
-    ui.print(style_status, POS_XP + 16 + 1, y, z, `${xp}/100`);
+    ui.print(style_status_xp, POS_XP + 16 + 1, y, z, `${xp}/100`);
   }
 
   function test(dt) {
