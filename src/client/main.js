@@ -36,10 +36,15 @@ const { KEYS, PAD } = input;
 const SPEEDSCALE = 3;
 
 Z.BACKGROUND = 1;
+Z.DROPS = 9;
 Z.SPRITES = 10;
 // hundreds for sprites here
-Z.FLOATERS = 1000;
+Z.DROPS_EARLY = 1100;
+Z.UI = 1200;
+Z.FLOATERS = 2000;
 Z.PARTICLES = 2000;
+
+const MAX_HP = 16;
 
 // let app = exports;
 // Virtual viewport for our game logic
@@ -81,6 +86,12 @@ function lineLineIntersect(out, p1, p2, p3, p4) {
   }
   return false;
 }
+
+const style_status = glov_font.style(null, {
+  color: 0xFFFFFFff,
+  outline_width: 4,
+  outline_color: 0x000000ff,
+});
 
 let floaters = [];
 function floater(opt) {
@@ -505,12 +516,15 @@ Maze.prototype.draw = function () {
 
 const ent_stats = {
   fishball: {
-    hp: 5,
+    hp: 6,
     damage: 1,
     speed: vec2(0.032, 0.032),
     len: 1,
     head_rot: false,
     normalize_speed: 1,
+    speed_pips: 1,
+    xp: 0,
+    vis_pips: 1,
   },
   eel: {
     hp: 2,
@@ -566,6 +580,7 @@ function Entity(type, pos) {
   for (let key in stats) {
     this[key] = stats[key];
   }
+  this.max_hp = this.hp;
   this.impulse = vec2(0,0);
   this.facing = 1;
   this.sprite = sprites[type];
@@ -598,11 +613,11 @@ function Entity(type, pos) {
     rot: 0,
   });
 }
-Entity.prototype.busy = function () {
+Entity.prototype.busy = function (any) {
   if (this.head.state !== 'head') {
     if (this.head.progress() === 1) {
       this.head.setState('head');
-    } else {
+    } else if (any || this.head.state !== 'happy') {
       return true;
     }
   }
@@ -668,9 +683,25 @@ function chompTarget(ent, full_body) {
 function wouldChomp(ent, full_body) {
   return chompTarget(ent, full_body);
 }
+function doPickup(player, drop) {
+  player.hp = min(player.hp + drop.hp, player.max_hp);
+  player.xp += drop.xp;
+  player.head.setState('happy');
+  sound_manager.play('button_click');
+}
 function doChomp(ent, full_body) {
   let hit = chompTarget(ent, full_body);
   let is_player = ent === state.player;
+  if (is_player) {
+    // check for drops too
+    for (let ii = state.drops.length - 1; ii >= 0; --ii) {
+      let drop = state.drops[ii];
+      if (v2distSq(ent.pos, drop.pos) < ENT_CHOMP_DIST_SQ * ent.chomp_radius_scale * ent.chomp_radius_scale) {
+        doPickup(ent, drop);
+        ridx(state.drops, ii);
+      }
+    }
+  }
   if (hit) {
     let now = engine.global_timer;
     let damage = ent.damage;
@@ -685,6 +716,11 @@ function doChomp(ent, full_body) {
       if (hit.hp <= 0) {
         let idx = state.entities.indexOf(hit);
         ridx(state.entities, idx);
+        state.drops.push({
+          pos: hit.pos.slice(0),
+          x: hit.pos[0], y: hit.pos[1], hp: hit.max_hp, frame: 10, z: Z.DROPS_EARLY, xp: hit.max_hp,
+          time: now,
+        });
       } else {
         // Remove a bit of the tail
         if (hit.trail.length > 1 && (!hit.min_len || hit.trail.length > hit.min_len + 1)) {
@@ -936,6 +972,7 @@ function nearScreen(pos) {
 
 function GameState() {
   this.entities = [];
+  this.drops = [];
   this.player = new Entity('fishball', [290,140]);
   this.player.id = 1001;
   origin[0] = this.player.pos[0] - game_width / 2;
@@ -947,7 +984,7 @@ function actionDown() {
   return input.keyDown(KEYS.SPACE) || input.keyDown(KEYS.E) || input.keyDown(KEYS.ENTER) || input.padButtonDown(PAD.A);
 }
 GameState.prototype.update = function (dt) {
-  if (!this.player.busy() && actionDown()) {
+  if (!this.player.busy(true) && actionDown()) {
     this.player.chomp_finished = false;
     this.player.head.setState('chomp');
   }
@@ -1030,6 +1067,17 @@ GameState.prototype.draw = function () {
       }
     }
   }
+  for (let ii = this.drops.length - 1; ii >= 0; --ii) {
+    let drop = this.drops[ii];
+    if (engine.global_timer - drop.time > 1500) {
+      drop.z = Z.DROPS;
+    }
+    if (!nearScreen(drop.pos)) {
+      ridx(this.drops, ii);
+    } else {
+      sprites.drops.draw(drop);
+    }
+  }
 
   // this.maze.drawDebug();
   this.maze.draw();
@@ -1043,6 +1091,7 @@ export function main() {
     pixely: PIXEL_STRICT ? 'strict' : 'on',
     viewport_postprocess: false,
     sound_manager: require('./glov/sound_manager.js').create(),
+    show_fps: false,
   })) {
     return;
   }
@@ -1104,6 +1153,11 @@ export function main() {
       ow: { // also how long we're stunned upon hit
         frames: [9,0],
         times: [400,0],
+        loop: false,
+      },
+      happy: {
+        frames: [10,11,0],
+        times: [300,300,0],
         loop: false,
       },
     });
@@ -1220,6 +1274,22 @@ export function main() {
     sprites.game_bg = createSprite({
       name: 'bg',
     });
+    sprites.header = createSprite({
+      name: 'header',
+    });
+    sprites.ui = createSprite({
+      name: 'ui',
+      ws: [13, 13, 13],
+      hs: [13, 13, 13, 13],
+      size: vec2(13, 13),
+    });
+    sprites.drops = createSprite({
+      name: 'ui',
+      ws: [13, 13, 13],
+      hs: [13, 13, 13, 13],
+      size: vec2(13, 13),
+      origin: vec2(6/13, 6/13),
+    });
 
     let caves_param = {
       ws: [43],
@@ -1272,6 +1342,50 @@ export function main() {
     }
   }
 
+  const POS_HP = 11;
+  const POS_PAD = 13;
+  const POS_DAMAGE = POS_HP + (MAX_HP/2) * 14 + POS_PAD;
+  const VALUE_WIDTH = 10;
+  const POS_SPEED = POS_DAMAGE + 14 + VALUE_WIDTH + POS_PAD;
+  const POS_VIS = POS_SPEED + 14 + VALUE_WIDTH + POS_PAD;
+  const POS_XP = POS_VIS + 14 + VALUE_WIDTH + POS_PAD;
+  function drawUI() {
+    sprites.header.draw({
+      x: 0, y: 0, z: Z.UI - 1,
+      w: game_width,
+      h: 15,
+    });
+    let y = 1;
+    let z = Z.UI;
+    let { hp, max_hp, damage, speed_pips, xp, vis_pips } = state.player;
+    let blink = hp <= 3;
+    for (let ii = 0; ii < max_hp / 2; ++ii) {
+      let pos = POS_HP + ii * 14;
+      let frame = hp > ii*2 + 1 ? 0 : hp > ii*2 ? 1 : 4;
+      if (blink && engine.global_timer % 700 < 200) {
+        if (frame < 2) {
+          frame += 2;
+        } else {
+          frame = 2;
+        }
+      }
+      sprites.ui.draw({ x: pos, y, z, frame });
+    }
+
+    sprites.ui.draw({ x: POS_DAMAGE, y, z, frame: 7 });
+
+    sprites.ui.draw({ x: POS_SPEED, y, z, frame: 6 });
+
+    // sprites.ui.draw({ x: POS_VIS, y, z, frame: 8 });
+
+    sprites.ui.draw({ x: POS_XP, y, z, frame: 5 });
+    y += 3;
+    ui.print(style_status, POS_DAMAGE + 16 + 2, y, z, `${damage}`);
+    ui.print(style_status, POS_SPEED + 16 + 1, y, z, `${speed_pips}`);
+    // ui.print(style_status, POS_VIS + 16, y, z, `${vis_pips}`);
+    ui.print(style_status, POS_XP + 16 + 1, y, z, `${xp}/100`);
+  }
+
   function test(dt) {
     shiftView(0); // donotcheckin
     state.update(dt);
@@ -1279,6 +1393,7 @@ export function main() {
     state.draw();
 
     camera2d.setAspectFixed(game_width, game_height);
+    drawUI();
     const bg_scale = 1/32;
     sprites.game_bg.draw({
       x: 0, y: 0, z: Z.BACKGROUND,

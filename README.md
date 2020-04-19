@@ -8,7 +8,7 @@ LD46 Entry by Jimbly - "TBD"
 Start with: `npm start` (after running `npm i` once)
 
 Key systems:
-  HP + XP + upgrades
+  level up and upgrades
   spawn harder enemies based on level and/or distance from origin?
   Death
   Progress indication - depth, level, something.  High score?
@@ -22,6 +22,8 @@ Art:
   enemies
   sfx
   music
+
+shark needs a bigger mouth when chomping
 
 Stretch:
   respec (if upgrades are interesting enough)
