@@ -16,6 +16,7 @@ const { randCreate } = require('./glov/rand_alea.js');
 const shaders = require('./glov/shaders.js');
 const glov_sprites = require('./glov/sprites.js');
 const sprite_animation = require('./glov/sprite_animation.js');
+const transition = require('./glov/transition.js');
 const ui = require('./glov/ui.js');
 const { clamp, defaults, easeOut, lerp, lineCircleIntersect, ridx, sign, unit_vec4 } = require('../common/util.js');
 const {
@@ -45,6 +46,7 @@ Z.DROPS_EARLY = 1100;
 Z.VIS = 1150;
 Z.ELEC = Z.VIS + 2;
 Z.UI = 1200;
+Z.MODAL = 1300;
 Z.FLOATERS = 2000;
 Z.PARTICLES = 2000;
 
@@ -111,6 +113,17 @@ const style_levelup_title = glov_font.style(null, {
   color: pico8.font_colors[7],
   outline_width: 5, // 2.667,
   outline_color: pico8.font_colors[0],
+});
+
+const style_title_title = glov_font.style(null, {
+  color: pico8.font_colors[7],
+  outline_width: 5, // 2.667,
+  outline_color: pico8.font_colors[0],
+  glow_xoffs: 3.25,
+  glow_yoffs: 3.25,
+  glow_inner: -2.5,
+  glow_outer: 5,
+  glow_color: 0x000000ff,
 });
 
 let floaters = [];
@@ -652,7 +665,7 @@ let last_action_time = 0;
 
 const ent_stats = {
   fishball: {
-    hp: 6,
+    hp: 1,
     speed: vec2(0.016, 0.016),
     speed_base: vec2(0.016, 0.016),
     speed_inc: vec2(0.006, 0.006),
@@ -720,6 +733,7 @@ function Entity(type, pos) {
   this.vel = vec2(0,0);
   this.accel = vec2(0.001, 0.001);
   this.head_rot = true;
+  this.dead = false;
   this.rot = 0;
   this.chomp_speed_scale = 1;
   this.chomp_radius_scale = 1;
@@ -762,6 +776,9 @@ function Entity(type, pos) {
   });
 }
 Entity.prototype.busy = function (any) {
+  if (this.dead) {
+    return true;
+  }
   if (this.head.state !== 'head') {
     if (this.head.progress() === 1) {
       this.head.setState('head');
@@ -771,6 +788,7 @@ Entity.prototype.busy = function (any) {
   }
   return false;
 };
+let titleInit;
 Entity.prototype.impulseFromInput = function (dt) {
   v2addScale(this.speed, this.speed_base, this.speed_inc, this.speed_pips - 1);
   this.damage = this.damage_pips;
@@ -801,6 +819,19 @@ Entity.prototype.impulseFromInput = function (dt) {
       --this.vis_pips;
     }
   }
+  if (input.keyDownEdge(KEYS.ESC)) {
+    engine.setState(titleInit);
+    transition.queue(Z.TRANSITION_FINAL, transition.pixelate(1000));
+    // ui.modalDialog({
+    //   text: 'Cease living?',
+    //   buttons: {
+    //     Yes: function () {
+    //       state.player.die();
+    //     },
+    //     No: null,
+    //   }
+    // });
+  }
 };
 const ENTITY_RADIUS = 7;
 const ENT_CHOMP_DIST_SQ = (ENTITY_RADIUS*1.5)*(ENTITY_RADIUS*1.5);
@@ -828,7 +859,7 @@ function chompTarget(ent, full_body) {
   // ui.drawCircle(ent.pos[0], ent.pos[1], 1000, sqrt(dist), 1, vec4(1,1,1,0.5));
   for (let ii = 0; ii < state.entities.length; ++ii) {
     let target = state.entities[ii];
-    if (target.type === ent.type || !target.visible || target.is_player === ent.is_player) {
+    if (target.type === ent.type || !target.visible || target.is_player === ent.is_player || target.dead) {
       continue;
     }
     if (now < target.invincible_until) {
@@ -897,6 +928,9 @@ function doChomp(ent, full_body) {
     hit.head.setState('ow');
     if (hit_player) {
       // detect death, game over
+      if (hit.hp <= 0) {
+        hit.die();
+      }
     } else {
       if (hit.hp <= 0) {
         let idx = state.entities.indexOf(hit);
@@ -932,6 +966,13 @@ function blendRot(weight, a, b) {
   }
   return ret;
 }
+
+Entity.prototype.die = function () {
+  this.dead = true;
+  this.head.setState('head_dead');
+  this.body.setState('body_dead');
+  this.tail.setState('tail_dead');
+};
 
 Entity.prototype.update = (function () {
   let last_pos = vec2();
@@ -1089,6 +1130,9 @@ let chomp_finish = vec2();
 const TRY_CHOMP_DIST = 18;
 Entity.prototype.tryChompPlayer = function () {
   // Is any part of the player in the area in front of us?
+  if (state.player.dead) {
+    return false;
+  }
   let chomp_start = this.pos;
   chomp_finish[1] = this.pos[1];
   chomp_finish[0] = this.pos[0] + this.facing * TRY_CHOMP_DIST;
@@ -1310,41 +1354,52 @@ GameState.prototype.finishLevelUp = function (choice) {
     }, 500);
   }
 };
+function paused() {
+  return state.paused || ui.menu_up;
+}
 GameState.prototype.update = function (dt) {
   // Player
   let player = this.player;
-  this.player.impulseFromInput(dt);
-  if (!state.paused && !player.busy(true)) {
-    if (levelUpOK()) {
-      this.startLevelUp();
-      // ui.print(null, player.pos[0], player.pos[1], 10000, 'Level-up OK');
+  if (player.dead) {
+    if (this.player.head.progress() >= 1) {
+      // save score, return to main menu?
+      transition.queue(Z.TRANSITION_FINAL, transition.pixelate(1000));
+      engine.setState(titleInit);
     }
-    if (!this.paused && actionDown()) {
-      if (player.impulse[0] < -0.1) {
-        player.facing = -1;
-      } else if (player.impulse[0] > 0.1) {
-        player.facing = 1;
+  } else {
+    this.player.impulseFromInput(dt);
+    if (!paused() && !player.busy(true)) {
+      if (levelUpOK()) {
+        this.startLevelUp();
+        // ui.print(null, player.pos[0], player.pos[1], 10000, 'Level-up OK');
       }
-      player.chomp_finished = false;
-      player.head.setState('chomp');
+      if (actionDown()) {
+        if (player.impulse[0] < -0.1) {
+          player.facing = -1;
+        } else if (player.impulse[0] > 0.1) {
+          player.facing = 1;
+        }
+        player.chomp_finished = false;
+        player.head.setState('chomp');
+      }
     }
-  }
-  if (engine.DEBUG) {
-    if (input.keyDownEdge(KEYS.L)) {
-      doPickup(player, { pos: player.pos.slice(0), x: player.pos[0],
-        y: this.player.pos[1], z: Z.DROPS,
-        xp: this.player.xp_for_level, hp: 100 });
-    }
-    if (input.keyDownEdge(KEYS.P)) {
-      this.drops.push({
-        pos: player.pos.slice(0),
-        x: player.pos[0], y: player.pos[1], hp: player.max_hp, frame: 10, z: Z.DROPS_EARLY, xp: player.max_hp,
-      });
+    if (engine.DEBUG) {
+      if (input.keyDownEdge(KEYS.L)) {
+        doPickup(player, { pos: player.pos.slice(0), x: player.pos[0],
+          y: this.player.pos[1], z: Z.DROPS,
+          xp: this.player.xp_for_level, hp: 100 });
+      }
+      if (input.keyDownEdge(KEYS.P)) {
+        this.drops.push({
+          pos: player.pos.slice(0),
+          x: player.pos[0], y: player.pos[1], hp: player.max_hp, frame: 10, z: Z.DROPS_EARLY, xp: player.max_hp,
+        });
+      }
     }
   }
 
   // General
-  if (!this.paused) {
+  if (!paused()) {
     for (let ii = 0; ii < this.entities.length; ++ii) {
       let ent = this.entities[ii];
       ent.visible = nearScreen(ent.pos);
@@ -1488,6 +1543,8 @@ export function main() {
   // Perfect sizes for pixely modes
   ui.scaleSizes(13 / 32);
   ui.setFontHeight(8);
+  ui.setModalSizes(null, 180, 100, 2, 4);
+  ui.setButtonHeight(17);
 
   function initGraphics() {
     const sprite_size = 13;
@@ -1509,7 +1566,7 @@ export function main() {
     }
     sprites.fishball = createSprite({
       name: 'fishball',
-      ws: [13, 13, 13],
+      ws: [13, 13, 13, 13],
       hs: [13, 13, 13, 13],
       size: vec2(sprite_size, sprite_size),
       origin: vec2(6/13, 6/13),
@@ -1543,6 +1600,21 @@ export function main() {
       happy: {
         frames: [10,11,0],
         times: [300,300,0],
+        loop: false,
+      },
+      head_dead: {
+        frames: 12,
+        times: 3000,
+        loop: false,
+      },
+      body_dead: {
+        frames: 13,
+        times: 1000,
+        loop: false,
+      },
+      tail_dead: {
+        frames: 14,
+        times: 1000,
         loop: false,
       },
     });
@@ -1703,6 +1775,9 @@ export function main() {
     caves.two_urlr = createSprite(defaults({ name: 'cave/2-urlr' }, caves_param));
     caves.full = createSprite(defaults({ name: 'cave/3' }, caves_param));
 
+  }
+
+  function initState() {
     state = new GameState();
   }
 
@@ -1958,7 +2033,7 @@ export function main() {
     });
   }
 
-  function test(dt) {
+  function main(dt) {
     shiftView(0); // donotcheckin
     state.update(dt);
     shiftView(dt);
@@ -1990,11 +2065,124 @@ export function main() {
     });
   }
 
-  function testInit(dt) {
-    engine.setState(test);
-    test(dt);
+  function mainInit(dt) {
+    if (!state || state.player.dead) {
+      initState();
+    }
+    engine.setState(main);
+    main(dt);
   }
 
+
+  let title_choice;
+  let title_last_mouse_idx;
+  function title(dt) {
+    const bg_scale = 1/32;
+    sprites.game_bg.draw({
+      x: 0, y: 0, z: Z.BACKGROUND,
+      w: game_width,
+      h: game_height,
+      uvs: vec4(0,0, game_width*bg_scale, game_height*bg_scale),
+    });
+
+    let VBORDER = 30;
+    let PADDING = 10;
+    let BUTTON_SCALE = 5;
+    let BUTTONW = 17 * BUTTON_SCALE;
+    let PANELW = BUTTONW * 2 + PADDING * 3;
+    let HBORDER = (game_width - PANELW)/2 | 0;
+    let BUTTONH = BUTTONW;
+    let x = HBORDER;
+    let y = VBORDER;
+    let z = Z.UI;
+    x += PADDING;
+    y += PADDING + 8;
+    let title_size = ui.font_height * 2;
+    font.drawSizedAligned(style_title_title, game_width / 2, y, z, title_size, font.ALIGN.HCENTER, 0, 0, 'Sharkbait');
+    y += title_size + 16;
+    let x0 = x;
+
+    let choices = [
+      { frame: 14 },
+      { frame: 15 }
+    ];
+    if (input.keyDownEdge(KEYS.A) || input.keyDownEdge(KEYS.LEFT) || input.padButtonDownEdge(PAD.LEFT)) {
+      title_choice = 0;
+    }
+    if (input.keyDownEdge(KEYS.D) || input.keyDownEdge(KEYS.RIGHT) || input.padButtonDownEdge(PAD.RIGHT)) {
+      title_choice = choices.length - 1;
+    }
+    let finish = false;
+    let mouse_idx = -1;
+    for (let ii = 0; ii < choices.length; ++ii) {
+      let choice = choices[ii];
+      let selected = title_choice === ii;
+      if (ui.buttonImage({
+        x, y, z, img: sprites.ui, frame: choice.frame,
+        w: BUTTONW,
+        h: BUTTONH,
+        shrink: 13/17,
+        base_name: selected ? 'button_rollover' : 'button',
+        no_focus: true,
+      }) || selected && actionDownEdge()) {
+        title_choice = ii;
+        finish = true;
+      }
+      if (!input.touch_mode && ui.button_mouseover) {
+        mouse_idx = ii;
+      }
+      if (selected) {
+        sprites.ui.draw({
+          x: (x + (BUTTONW - 26) / 2) | 0,
+          y: y + BUTTONH,
+          w: 2, h: 2,
+          frame: 11,
+        });
+      }
+      x += PADDING + BUTTONW;
+    }
+    if (finish) {
+      if (title_choice === 0) {
+        transition.queue(Z.TRANSITION_FINAL, transition.pixelate(1000));
+        engine.setState(mainInit);
+      } else {
+        // TODO: leaderboards
+      }
+    }
+    if (mouse_idx !== title_last_mouse_idx) {
+      title_last_mouse_idx = mouse_idx;
+      title_choice = mouse_idx;
+    }
+
+    y += BUTTONH + PADDING + 16;
+
+    if (ui.buttonText({
+      x: x0 + 140,
+      y,
+      z,
+      w: 40,
+      text: sound_manager.sound_on ? String.fromCharCode(2) : String.fromCharCode(1),
+    })) {
+      sound_manager.sound_on = sound_manager.music_on = !sound_manager.sound_on;
+    }
+
+    ui.panel({
+      x: HBORDER,
+      y: VBORDER,
+      w: PANELW,
+      h: game_height - VBORDER * 2,
+      color: unit_vec4,
+    });
+  }
+
+  titleInit = function (dt) {
+    title_choice = -1;
+    title_last_mouse_idx = -1;
+    engine.setState(title);
+    title(dt);
+  };
+
   initGraphics();
-  engine.setState(testInit);
+  //engine.setState(mainInit);
+  engine.setState(titleInit);
 }
