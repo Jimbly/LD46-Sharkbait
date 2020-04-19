@@ -666,7 +666,7 @@ let last_action_time = 0;
 
 const ent_stats = {
   fishball: {
-    hp: 1,
+    hp: 6,
     speed: vec2(0.016, 0.016),
     speed_base: vec2(0.016, 0.016),
     speed_inc: vec2(0.006, 0.006),
@@ -889,12 +889,13 @@ function doPickup(player, drop) {
   let old_xp = player.xp;
   player.xp += drop.xp;
   player.head.setState('happy');
-  sound_manager.play('button_click');
+  sound_manager.play('eat');
   floater({ x: drop.x - 8, y: drop.y, text: `+${drop.xp}`, style: 'xp' });
   floater({ x: drop.x + 8, y: drop.y, text: `+${dhp}`, style: 'hp' });
 
   if (old_xp < player.xp_for_level && player.xp >= player.xp_for_level) {
     setTimeout(function () {
+      sound_manager.play('levelup');
       floater({ x: player.pos[0], y: player.pos[1], text: '', style: 'xp', icon: 5 });
     }, 500);
   }
@@ -924,9 +925,12 @@ function doChomp(ent, full_body) {
     }
     floater({ x: hit.pos[0], y: hit.pos[1], text: `${hit_player?'-':''}${damage}`,
       style: hit_player ? 'player' : 'enemy' });
+    //if (!(engine.DEBUG && hit_player)) {
     hit.hp -= damage;
+    //}
     hit.invincible_until = now + (hit_player ? INVINCIBILITY_TIME_PLAYER : INVINCIBILITY_TIME);
     hit.head.setState('ow');
+    let killed = hit.hp <= 0;
     if (hit_player) {
       // detect death, game over
       if (hit.hp <= 0) {
@@ -948,9 +952,13 @@ function doChomp(ent, full_body) {
         }
       }
     }
-    sound_manager.play('button_click');
-  } else if (is_player) {
-    sound_manager.play('rollover');
+    sound_manager.play(is_player ? killed ? 'kill_enemy' : 'hit_enemy' : killed ? 'die' : 'hit_player');
+  } else {
+    if (is_player) {
+      sound_manager.play('miss_player');
+    } else if (!full_body) {
+      sound_manager.play('miss_enemy');
+    }
   }
 }
 
@@ -1328,6 +1336,7 @@ GameState.prototype.finishLevelUp = function (choice) {
   player.xp -= player.xp_for_level;
   player.xp_for_level = xpForLevel(player.level);
   if (choice) {
+    sound_manager.play('levelup');
     floater({ x: player.pos[0], y: player.pos[1], text: '', style: 'xp', icon: choice.frame });
     switch (choice.type) {
       case 'speed':
@@ -1571,6 +1580,9 @@ export function main() {
 
 
   function initGraphics() {
+    [
+      'die', 'eat', 'hit_enemy', 'hit_player', 'kill_enemy', 'levelup', 'miss_enemy', 'miss_player',
+    ].forEach((a) => sound_manager.loadSound(a));
     const sprite_size = 13;
     const createSprite = glov_sprites.create;
     const createAnimation = sprite_animation.create;

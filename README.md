@@ -1,11 +1,13 @@
 Ludum Dare 46 - Keep it alive
 =============================
 
-LD46 Entry by Jimbly - "TBD"
+LD46 Entry by Jimbly - "Sharkbait"
 
 * Using [Javascript libGlov/GLOV.js framework](https://github.com/Jimbly/glovjs)
 
 Start with: `npm start` (after running `npm i` once)
+
+TODO
 
 Key systems:
   Something non-deadly to search for and find, perhaps with a cue as to where it is?  One per segment, not on traced route?
@@ -21,21 +23,8 @@ Art:
     fish become bones upon death!
     particles / blood upon bite
   caves
-  enemies
-  sfx
-    hit enemy
-    enemy die / hit enemy fatal
-    miss enemy
-    get hit
-    get missed
-    electric?
-    eat food
-    level up (musical)
-    upgrade choice (musical)
-    die (musical)
   music
 
-trigger pixely transition on death and respawn, at least, maybe level up dialog?
 shark needs a bigger mouth when chomping
 
 Stretch:
