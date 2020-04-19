@@ -8,8 +8,6 @@ LD46 Entry by Jimbly - "TBD"
 Start with: `npm start` (after running `npm i` once)
 
 Key systems:
-  Progress indication - depth, level, something.  High score?
-  Title screen, just a big play button
   Something non-deadly to search for and find, perhaps with a cue as to where it is?  One per segment, not on traced route?
 
 Balance:

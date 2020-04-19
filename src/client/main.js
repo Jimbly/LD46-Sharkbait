@@ -12,8 +12,9 @@ const { abs, atan2, floor, max, min, sin, sqrt, PI } = Math;
 const perf = require('./glov/perf.js');
 const pico8 = require('./glov/pico8.js');
 const { randCreate } = require('./glov/rand_alea.js');
-// const soundscape = require('./glov/soundscape.js');
+const score_system = require('./glov/score.js');
 const shaders = require('./glov/shaders.js');
+// const soundscape = require('./glov/soundscape.js');
 const glov_sprites = require('./glov/sprites.js');
 const sprite_animation = require('./glov/sprite_animation.js');
 const transition = require('./glov/transition.js');
@@ -1546,6 +1547,29 @@ export function main() {
   ui.setModalSizes(null, 180, 100, 2, 4);
   ui.setButtonHeight(17);
 
+  // higher score is "better"
+  const score_mod1 = 100000;
+  function scoreToValue(score) {
+    return score.depth * score_mod1 + score.level;
+  }
+  function valueToScore(score) {
+    let level = (score % score_mod1);
+    score = Math.floor(score / score_mod1);
+    let depth = score;
+    return { depth, level };
+  }
+  let have_scores = false;
+  score_system.init(scoreToValue, valueToScore, { all: { name: 'all' } }, 'LD46');
+  score_system.getScore('all');
+
+  let last_depth = 1;
+  function saveScore() {
+    score_system.setScore('all', { depth: last_depth - 1, level: state.player.level - 1 }, () => {
+      have_scores = true;
+    });
+  }
+
+
   function initGraphics() {
     const sprite_size = 13;
     const createSprite = glov_sprites.create;
@@ -1753,13 +1777,13 @@ export function main() {
     sprites.ui = createSprite({
       name: 'ui',
       ws: [13, 13, 13, 13],
-      hs: [13, 13, 13, 13],
+      hs: [13, 13, 13, 13, 13],
       size: vec2(13, 13),
     });
     sprites.drops = createSprite({
       name: 'ui',
       ws: [13, 13, 13, 13],
-      hs: [13, 13, 13, 13],
+      hs: [13, 13, 13, 13, 13],
       size: vec2(13, 13),
       origin: vec2(6/13, 6/13),
     });
@@ -1875,7 +1899,9 @@ export function main() {
     let px = p[0];
     let py = p[1];
     let tier_data = state.maze.getTierData(px, py);
-    ui.print(style_status, POS_TIER + 16, y+3, z, `${floor(tier_data.dist) + 1}`);
+    last_depth = floor(tier_data.dist) + 1;
+    saveScore();
+    ui.print(style_status, POS_TIER + 16, y+3, z, `${last_depth}`);
 
     sprites.ui.draw({ x: POS_XP, y, z, frame: 5 });
     font.drawSizedAligned(style_status, POS_XP + 7, y+3, z + 1, ui.font_height, font.ALIGN.HCENTER,
@@ -2033,7 +2059,7 @@ export function main() {
     });
   }
 
-  function main(dt) {
+  function gameplay(dt) {
     shiftView(0); // donotcheckin
     state.update(dt);
     shiftView(dt);
@@ -2065,14 +2091,142 @@ export function main() {
     });
   }
 
-  function mainInit(dt) {
+  function gameplayInit(dt) {
     if (!state || state.player.dead) {
       initState();
     }
-    engine.setState(main);
-    main(dt);
+    engine.setState(gameplay);
+    gameplay(dt);
   }
 
+  let scores_edit_box;
+  function highScores() {
+    if (!have_scores) {
+      return;
+    }
+    let width = game_width * 0.75;
+    let x = (game_width - width) / 2;
+    let y = game_height / 16;
+    let y0 = y;
+    let z = Z.MODAL + 10;
+    let size = 8;
+    let pad = size;
+    font.drawSizedAligned(null, x, y, z, size * 2, glov_font.ALIGN.HCENTERFIT, width, 0, 'HIGH SCORES');
+    y += size * 2 + 2;
+    let scores = score_system.high_scores.all;
+    let widths = [10, 60, 24, 24];
+    let widths_total = 0;
+    for (let ii = 0; ii < widths.length; ++ii) {
+      widths_total += widths[ii];
+    }
+    let set_pad = size / 2;
+    for (let ii = 0; ii < widths.length; ++ii) {
+      widths[ii] *= (width - set_pad * (widths.length - 1)) / widths_total;
+    }
+    let align = [
+      glov_font.ALIGN.HFIT | glov_font.ALIGN.HRIGHT,
+      glov_font.ALIGN.HFIT,
+      glov_font.ALIGN.HFIT | glov_font.ALIGN.HCENTER,
+      glov_font.ALIGN.HFIT | glov_font.ALIGN.HCENTER,
+    ];
+    function drawSet(arr, style, header) {
+      let xx = x;
+      for (let ii = 0; ii < arr.length; ++ii) {
+        let str = String(arr[ii]);
+        if (header && str === 'Level') {
+          sprites.ui.draw({
+            x: xx + (widths[ii] - 13)/2 - 1,
+            y: y - 4, z,
+            frame: 5,
+          });
+        } else if (header && str === 'Distance') {
+          sprites.ui.draw({
+            x: xx + (widths[ii] - 13)/2 - 1,
+            y: y - 4, z,
+            frame: 16,
+          });
+        } else {
+          font.drawSizedAligned(style, xx, y, z, size, align[ii], widths[ii], 0, str);
+        }
+        xx += widths[ii] + set_pad;
+      }
+      y += size;
+    }
+    drawSet(['', 'Name', 'Distance', 'Level'], glov_font.styleColored(null, pico8.font_colors[6]), true);
+    y += 4;
+    let score_style = glov_font.styleColored(null, pico8.font_colors[7]);
+    let found_me = false;
+    for (let ii = 0; ii < scores.length; ++ii) {
+      let s = scores[ii];
+      let style = score_style;
+      let drawme = false;
+      if (s.name === score_system.player_name) {
+        style = glov_font.styleColored(null, pico8.font_colors[11]);
+        found_me = true;
+        drawme = true;
+      }
+      if (ii < 15 || drawme) {
+        drawSet([`#${ii+1}`, score_system.formatName(s), s.score.depth+1, s.score.level+1], style);
+      }
+    }
+    y += set_pad;
+    if (found_me && score_system.player_name.indexOf('Anonymous') === 0) {
+      if (!scores_edit_box) {
+        scores_edit_box = ui.createEditBox({
+          z,
+          w: game_width / 4,
+        });
+        scores_edit_box.setText(score_system.player_name);
+      }
+
+      if (scores_edit_box.run({
+        x,
+        y,
+      }) === scores_edit_box.SUBMIT || ui.buttonText({
+        x: x + scores_edit_box.w + size,
+        y: y - size * 0.25,
+        z,
+        w: size * 13,
+        h: ui.button_height,
+        text: 'Update Player Name'
+      })) {
+        // scores_edit_box.text
+        if (scores_edit_box.text) {
+          score_system.updatePlayerName(scores_edit_box.text);
+        }
+      }
+      y += size;
+    }
+
+    y += pad;
+
+    if (ui.buttonText({
+      x, y, z, w: 17,
+      text: '<-'
+    })) {
+      transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
+      engine.setState(titleInit);
+    }
+    y += ui.button_height;
+
+    ui.panel({
+      x: x - pad,
+      w: game_width / 2 + pad * 2,
+      y: y0 - pad,
+      h: y - y0 + pad * 2,
+      z: z - 1,
+      color: vec4(0, 0, 0, 1),
+    });
+
+    ui.menuUp();
+  }
+  function highScoresInit() {
+    score_system.updateHighScores(function () {
+      have_scores = true;
+    });
+    engine.setState(highScores);
+    highScores();
+  }
 
   let title_choice;
   let title_last_mouse_idx;
@@ -2144,9 +2298,13 @@ export function main() {
     if (finish) {
       if (title_choice === 0) {
         transition.queue(Z.TRANSITION_FINAL, transition.pixelate(1000));
-        engine.setState(mainInit);
+        engine.setState(gameplayInit);
       } else {
-        // TODO: leaderboards
+        transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
+        score_system.updateHighScores(function () {
+          have_scores = true;
+        });
+        engine.setState(highScoresInit);
       }
     }
     if (mouse_idx !== title_last_mouse_idx) {
@@ -2176,6 +2334,9 @@ export function main() {
   }
 
   titleInit = function (dt) {
+    score_system.updateHighScores(function () {
+      have_scores = true;
+    });
     title_choice = -1;
     title_last_mouse_idx = -1;
     engine.setState(title);
@@ -2183,6 +2344,7 @@ export function main() {
   };
 
   initGraphics();
-  //engine.setState(mainInit);
-  engine.setState(titleInit);
+  engine.setState(gameplayInit);
+  //engine.setState(titleInit);
+  //engine.setState(highScoresInit);
 }
