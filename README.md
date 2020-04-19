@@ -21,7 +21,6 @@ Art:
     swimming fish
     rising bubbles
     fish become bones upon death!
-    particles / blood upon bite
   caves
   music
 

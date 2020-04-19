@@ -133,6 +133,7 @@ function floater(opt) {
   floaters.push(opt);
 }
 const FLOATER_TIME = 1500;
+const FLOATER_TIME_SHORT = 500;
 const floater_styles = {
   enemy: glov_font.style(null, {
     color: pico8.font_colors[7],
@@ -159,13 +160,14 @@ function drawFloaters() {
   let now = engine.global_timer;
   for (let ii = floaters.length - 1; ii >= 0; --ii) {
     let fl = floaters[ii];
-    let progress = (now - fl.time) / FLOATER_TIME;
+    let time = fl.no_float ? FLOATER_TIME_SHORT : FLOATER_TIME;
+    let progress = (now - fl.time) / time;
     if (progress >= 1) {
       ridx(floaters, ii);
       continue;
     }
     let alpha = easeOut(1 - progress, 2);
-    let y = fl.y - easeOut(progress, 2) * 20;
+    let y = fl.no_float ? fl.y : fl.y - easeOut(progress, 2) * 20;
     if (fl.text) {
       font.drawSizedAligned(font.styleAlpha(floater_styles[fl.style], alpha),
         fl.x, y, Z.FLOATERS - progress, ui.font_height,
@@ -867,12 +869,14 @@ function chompTarget(ent, full_body) {
       continue;
     }
     if (anyCloser(check_pos, target.pos, dist)) {
+      target.hit_pos = target.pos;
       return target;
     }
     for (let jj = 0; jj < target.trail.length; ++jj) {
       let tr = target.trail[jj];
       // Just head, or tail here too?
       if (v2distSq(ent.pos, tr.pos) < dist) {
+        target.hit_pos = tr.pos;
         return target;
       }
     }
@@ -927,6 +931,7 @@ function doChomp(ent, full_body) {
       style: hit_player ? 'player' : 'enemy' });
     //if (!(engine.DEBUG && hit_player)) {
     hit.hp -= damage;
+    floater({ x: hit.hit_pos[0], y: hit.hit_pos[1], icon: 17 + rand.range(2), no_float: true });
     //}
     hit.invincible_until = now + (hit_player ? INVINCIBILITY_TIME_PLAYER : INVINCIBILITY_TIME);
     hit.head.setState('ow');
