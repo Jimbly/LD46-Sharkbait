@@ -11,6 +11,7 @@ const { ridx } = require('../../common/util.js');
 const DEFAULT_PERIOD = 30000;
 const DEFAULT_PERIOD_NOISE = 15000;
 let inherit_props = ['min_intensity', 'max', 'period', 'period_noise'];
+const volume = 0.25;
 function SoundScape(params) {
   let { base_path, layers } = params;
   this.intensity = 0;
@@ -95,6 +96,9 @@ SoundScape.prototype.tick = function () {
       wanted = 1 + floor(data.max * state.rel_intensity);
     }
     wanted = min(wanted, files.length);
+    if (!sound_manager.music_on || !sound_manager.resumed) {
+      wanted = 0;
+    }
     // Ensure active sounds are in the current file list
     let active_files = {};
     for (let ii = state.active.length - 1; ii >= 0; --ii) {
@@ -119,7 +123,7 @@ SoundScape.prototype.tick = function () {
       assert(valid_files.length);
       let idx = floor(random() * valid_files.length);
       let file = valid_files[idx];
-      let sound = sound_manager.play(file);
+      let sound = sound_manager.play(file, volume, true);
       if (!sound) {
         // still loading?
         --wanted;

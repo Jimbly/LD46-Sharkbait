@@ -163,11 +163,12 @@ class SoundManager {
 
   resume() { // eslint-disable-line class-methods-use-this
     // Not needed for Howler by default
+    this.resumed = true;
   }
 
-  play(soundname, volume) {
+  play(soundname, volume, as_music) {
     volume = volume || 1;
-    if (!this.sound_on) {
+    if (!as_music && !this.sound_on || as_music && !this.music_on) {
       return null;
     }
     if (Array.isArray(soundname)) {

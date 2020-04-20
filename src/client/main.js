@@ -14,7 +14,7 @@ const pico8 = require('./glov/pico8.js');
 const { randCreate } = require('./glov/rand_alea.js');
 const score_system = require('./glov/score.js');
 const shaders = require('./glov/shaders.js');
-// const soundscape = require('./glov/soundscape.js');
+const soundscape = require('./glov/soundscape.js');
 const glov_sprites = require('./glov/sprites.js');
 const sprite_animation = require('./glov/sprite_animation.js');
 const transition = require('./glov/transition.js');
@@ -65,6 +65,7 @@ let anims = {};
 let origin = vec2(0,0);
 
 let state;
+let ss;
 
 let cutout_shader;
 
@@ -792,6 +793,8 @@ Entity.prototype.busy = function (any) {
   return false;
 };
 let titleInit;
+let gameplayInit;
+let highScoresInit;
 Entity.prototype.impulseFromInput = function (dt) {
   v2addScale(this.speed, this.speed_base, this.speed_inc, this.speed_pips - 1);
   this.damage = this.damage_pips;
@@ -1290,6 +1293,7 @@ const MAX_DAMAGE = 8;
 const MAX_VIS = 4;
 GameState.prototype.startLevelUp = function () {
   this.levelup_active = true;
+  ss.setTag('menu', true);
   this.paused = true;
   let choices = [];
   let player = this.player;
@@ -1336,6 +1340,7 @@ GameState.prototype.startLevelUp = function () {
 GameState.prototype.finishLevelUp = function (choice) {
   let { player } = this;
   this.levelup_active = false;
+  ss.setTag('menu', false);
   this.paused = false;
   player.level++;
   player.xp -= player.xp_for_level;
@@ -1370,7 +1375,7 @@ GameState.prototype.finishLevelUp = function (choice) {
   }
 };
 function paused() {
-  return state.paused || ui.menu_up;
+  return state.paused || ui.menu_up || transition.active();
 }
 GameState.prototype.update = function (dt) {
   // Player
@@ -1588,6 +1593,55 @@ export function main() {
     [
       'die', 'eat', 'hit_enemy', 'hit_player', 'kill_enemy', 'levelup', 'miss_enemy', 'miss_player',
     ].forEach((a) => sound_manager.loadSound(a));
+
+    function genFiles(base, count) {
+      let ret = [];
+      for (let ii = 0; ii < count; ++ii) {
+        ret.push(`${base}${ii+1}`);
+      }
+      return ret;
+    }
+    ss = soundscape.create({
+      base_path: 'soundscape/',
+      layers: {
+        bg: {
+          max: 3,
+          period: 30000,
+          period_noise: 10000,
+          min_intensity: 0,
+          files: genFiles('bg', 7),
+          tags: {
+            epic: {
+              priority: 1,
+              files: genFiles('bg-epic', 7),
+            },
+            menu: {
+              priority: 0.5,
+              files: [],
+            },
+          },
+        },
+        bass: {
+          max: 2,
+          period: 20000,
+          period_noise: 10000,
+          min_intensity: 0.3,
+          files: genFiles('bass', 8),
+        },
+        color: {
+          max: 1,
+          min_intensity: 0.6,
+          files: genFiles('color', 6),
+        },
+        // fg: {
+        //   max: 1,
+        //   min_intensity: 0.6,
+        //   files: genFiles('fg', 2),
+        // },
+      },
+    });
+    engine.addTickFunc(ss.tick.bind(ss));
+
     const sprite_size = 13;
     const createSprite = glov_sprites.create;
     const createAnimation = sprite_animation.create;
@@ -1886,7 +1940,7 @@ export function main() {
     });
     let y = 1;
     let z = Z.UI;
-    let { hp, max_hp, xp, xp_for_level, level } = state.player;
+    let { hp, max_hp, xp, xp_for_level, level, speed_pips } = state.player;
     // let { hdamage, speed_pips, vis_pips } = state.player;
     let blink = hp <= 3;
     for (let ii = 0; ii < max_hp / 2; ++ii) {
@@ -1918,6 +1972,15 @@ export function main() {
     let tier_data = state.maze.getTierData(px, py);
     last_depth = floor(tier_data.dist) + 1;
     saveScore();
+    ss.setTag('epic', last_depth >= 10);
+    let min_intensity = 0.5 * max((speed_pips - 1) / (MAX_SPEED - 1), num_ents / 30);
+    let max_intensity = 1;
+    let ss_intensity = min_intensity + (max_intensity - min_intensity) *
+      (0.5 + 0.5 * sin(engine.global_timer * 0.00003 - PI/2));
+    ss.setIntensity(ss_intensity);
+    if (engine.DEBUG) {
+      ui.print(style_status, 100, 100, z, `${ss_intensity.toFixed(4)}`);
+    }
     ui.print(style_status, POS_TIER + 16, y+3, z, `${last_depth}`);
 
     sprites.ui.draw({ x: POS_XP, y, z, frame: 5 });
@@ -2108,14 +2171,6 @@ export function main() {
     });
   }
 
-  function gameplayInit(dt) {
-    if (!state || state.player.dead) {
-      initState();
-    }
-    engine.setState(gameplay);
-    gameplay(dt);
-  }
-
   let scores_edit_box;
   function highScores() {
     if (!have_scores) {
@@ -2220,7 +2275,7 @@ export function main() {
     if (ui.buttonText({
       x, y, z, w: 17,
       text: '<-'
-    })) {
+    }) || input.keyDownEdge(KEYS.ESC) || input.padButtonDownEdge(PAD.B)) {
       transition.queue(Z.TRANSITION_FINAL, transition.pixelate(500));
       engine.setState(titleInit);
     }
@@ -2237,13 +2292,7 @@ export function main() {
 
     ui.menuUp();
   }
-  function highScoresInit() {
-    score_system.updateHighScores(function () {
-      have_scores = true;
-    });
-    engine.setState(highScores);
-    highScores();
-  }
+
 
   let title_choice;
   let title_last_mouse_idx;
@@ -2332,13 +2381,23 @@ export function main() {
     y += BUTTONH + PADDING + 16;
 
     if (ui.buttonText({
+      x: x0 + 140 - 50,
+      y,
+      z,
+      w: 40,
+      text: `MUS: ${sound_manager.music_on ? String.fromCharCode(2) : String.fromCharCode(1)}`,
+    })) {
+      sound_manager.music_on = !sound_manager.music_on;
+    }
+
+    if (ui.buttonText({
       x: x0 + 140,
       y,
       z,
       w: 40,
-      text: sound_manager.sound_on ? String.fromCharCode(2) : String.fromCharCode(1),
+      text: `SFX: ${sound_manager.sound_on ? String.fromCharCode(2) : String.fromCharCode(1)}`,
     })) {
-      sound_manager.sound_on = sound_manager.music_on = !sound_manager.sound_on;
+      sound_manager.sound_on = !sound_manager.sound_on;
     }
 
     ui.panel({
@@ -2350,7 +2409,31 @@ export function main() {
     });
   }
 
+
+  gameplayInit = function (dt) {
+    ss.setTag('menu', false);
+    ss.setTag('epic', false);
+    ss.setIntensity(0);
+    if (!state || state.player.dead) {
+      initState();
+    }
+    engine.setState(gameplay);
+    gameplay(dt);
+  };
+  highScoresInit = function () {
+    ss.setTag('menu', true);
+    ss.setTag('epic', false);
+    ss.setIntensity(0.25);
+    score_system.updateHighScores(function () {
+      have_scores = true;
+    });
+    engine.setState(highScores);
+    highScores();
+  };
   titleInit = function (dt) {
+    ss.setTag('menu', true);
+    ss.setTag('epic', false);
+    ss.setIntensity(0.5);
     score_system.updateHighScores(function () {
       have_scores = true;
     });

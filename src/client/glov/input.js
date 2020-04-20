@@ -300,6 +300,7 @@ function onKeyDown(event) {
     event.preventDefault();
   }
   // console.log(`${event.code} ${event.keyCode}`);
+  engine.sound_manager.resume();
 
   // Letting through to our code regardless of no_stop, because we handle things like ESC in INPUT elements
   let ks = key_state_new[code];
