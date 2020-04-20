@@ -2140,7 +2140,6 @@ export function main() {
   }
 
   function gameplay(dt) {
-    shiftView(0); // donotcheckin
     state.update(dt);
     shiftView(dt);
     state.draw();
