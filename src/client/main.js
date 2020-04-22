@@ -1225,10 +1225,12 @@ function GameState() {
   this.paused = false;
 }
 let need_action_release = false;
+let did_action_button = String(document.location).indexOf('D=COMPO') !== -1;
 function actionDown() {
   let ret = input.keyDown(KEYS.SPACE) || input.keyDown(KEYS.E) || input.keyDown(KEYS.ENTER) ||
     input.padButtonDown(PAD.A);
   if (ret) {
+    did_action_button = true;
     last_action_time = engine.global_timer;
   }
   if (need_action_release) {
@@ -1978,9 +1980,9 @@ export function main() {
     let ss_intensity = min_intensity + (max_intensity - min_intensity) *
       (0.5 + 0.5 * sin(engine.global_timer * 0.00003 - PI/2));
     ss.setIntensity(ss_intensity);
-    if (engine.DEBUG) {
-      ui.print(style_status, 100, 100, z, `${ss_intensity.toFixed(4)}`);
-    }
+    // if (engine.DEBUG) {
+    //   ui.print(style_status, 100, 100, z, `${ss_intensity.toFixed(4)}`);
+    // }
     ui.print(style_status, POS_TIER + 16, y+3, z, `${last_depth}`);
 
     sprites.ui.draw({ x: POS_XP, y, z, frame: 5 });
@@ -2155,6 +2157,10 @@ export function main() {
 
     if (state.levelup_active) {
       doLevelUp();
+    }
+    if (!did_action_button && engine.global_timer > 20000) {
+      font.drawSizedAligned(style_status, game_width/2, game_height*2/3, Z.FLOATERS, ui.font_height,
+        font.ALIGN.HCENTER, 0, 0, 'Press SPACE or E to BITE');
     }
     drawUI();
     const bg_scale = 1/32;
