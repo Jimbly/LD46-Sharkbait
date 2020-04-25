@@ -9,7 +9,7 @@ const fs = require('fs');
 const glov_font = require('./glov/font.js');
 const input = require('./glov/input.js');
 const { abs, atan2, floor, max, min, sin, sqrt, PI } = Math;
-const perf = require('./glov/perf.js');
+// const perf = require('./glov/perf.js');
 const pico8 = require('./glov/pico8.js');
 const { randCreate } = require('./glov/rand_alea.js');
 const score_system = require('./glov/score.js');
@@ -48,6 +48,7 @@ Z.VIS = 1150;
 Z.ELEC = Z.VIS + 2;
 Z.UI = 1200;
 Z.MODAL = 1300;
+Z.MAP = 1400;
 Z.FLOATERS = 2000;
 Z.PARTICLES = 2000;
 
@@ -69,7 +70,7 @@ let ss;
 
 let cutout_shader;
 
-const PIXEL_STRICT = true;
+const PIXEL_STRICT = !engine.defines.MAP;
 
 let sound_manager;
 let font;
@@ -439,38 +440,145 @@ Maze.prototype.getSegment = function (sx, sy) {
   }
   return seg;
 };
+const CAVE_SCALE = 2;
+const CAVE_W = 43 * CAVE_SCALE;
+const CAVE_H = 49 * CAVE_SCALE;
+const CAVE_SKEWY = floor(CAVE_H/2);
+const CAVE_COLOR = pico8.colors[5];
 const color_connected = vec4(1,1,0.5,1);
-const color_disconnected = vec4(0.3, 0.3, 0.3, 1);
-const draw_debug_scale = 10;
+const color_disconnected = vec4(1, 1, 1, 0.1);
+const color_disconnected_edge = vec4(1, 1, 1, 0.4);
+const draw_debug_scale = CAVE_H;
+let debug_segments = false;
+let debug_lines = false;
+let debug_zoom = engine.defines.MAP ? 1.5*1.5*1.5 : 1;
 Maze.prototype.drawDebugSub = function (sx, sy, x0, y0) {
   let seg = this.getSegment(sx,sy);
-  let z = Z.SPRITES - 1;
+  let z = Z.MAP - 1;
   function screenX(xx,yy) {
-    return 0.5 + x0 + xx*hex_dx*draw_debug_scale + sx * 2;
+    return 0.5 + x0 + xx*hex_dx*draw_debug_scale/* + sx * 2*/;
   }
   function screenY(xx,yy) {
-    return 0.5 + y0 + yy*draw_debug_scale - skewy * xx * draw_debug_scale + sy * 3;
+    return 0.5 + y0 + yy*draw_debug_scale - skewy * xx * draw_debug_scale/* + sy * 3 */;
   }
   for (let xx = 0; xx < SEG_SIZE; ++xx) {
     for (let yy = 0; yy < SEG_SIZE; ++yy) {
-      ui.drawLine(screenX(xx,yy), screenY(xx,yy), screenX(xx+1,yy), screenY(xx+1,yy), z, 1, 1,
-        seg.connected(xx, yy, xx+1, yy) ? color_connected : color_disconnected);
-      ui.drawLine(screenX(xx,yy), screenY(xx,yy), screenX(xx+1,yy+1), screenY(xx+1,yy+1), z, 1, 1,
-        seg.connected(xx, yy, xx+1, yy+1) ? color_connected : color_disconnected);
-      ui.drawLine(screenX(xx,yy), screenY(xx,yy), screenX(xx,yy+1), screenY(xx,yy+1), z, 1, 1,
-        seg.connected(xx, yy, xx, yy+1) ? color_connected : color_disconnected);
+      if (!yy || debug_lines) {
+        ui.drawLine(screenX(xx,yy), screenY(xx,yy), screenX(xx+1,yy), screenY(xx+1,yy), z, debug_zoom, 0.95,
+          debug_lines && seg.connected(xx, yy, xx+1, yy) ?
+            color_connected :
+            yy || !debug_segments ?
+              color_disconnected :
+              color_disconnected_edge);
+      }
+      if (debug_lines) {
+        ui.drawLine(screenX(xx,yy), screenY(xx,yy), screenX(xx+1,yy+1), screenY(xx+1,yy+1), z, debug_zoom, 0.95,
+          seg.connected(xx, yy, xx+1, yy+1) ? color_connected : color_disconnected);
+      }
+      if (!xx || debug_lines) {
+        ui.drawLine(screenX(xx,yy), screenY(xx,yy), screenX(xx,yy+1), screenY(xx,yy+1), z, debug_zoom, 0.95,
+          debug_lines && seg.connected(xx, yy, xx, yy+1) ?
+            color_connected :
+            xx || !debug_segments ?
+              color_disconnected :
+              color_disconnected_edge);
+      }
     }
-
   }
 };
-Maze.prototype.drawDebug = function () {
-  let x0 = 0;
-  let y0 = 0;
-  for (let sx = 0; sx < 5; ++sx) {
-    for (let sy = 0; sy < 5; ++sy) {
-      this.drawDebugSub(sx,sy,
-        x0 + sx*hex_dx*SEG_SIZE*draw_debug_scale,
-        y0 + (sy - skewy * sx)*SEG_SIZE*draw_debug_scale);
+let debug_impulse = vec2(0,0);
+let debug_caves = true;
+Maze.prototype.drawDebug = function (dt) {
+  // ui.drawRect(0,0, game_width, game_height, Z.MAP - 5, vec4(0,0,0,0.5));
+
+  let z = Z.MAP + 10;
+  let x = camera2d.x0() + 10;
+  let y = 10;
+  let do_ui = !engine.defines.NOUI || input.keyDown(KEYS.U);
+  if (do_ui && ui.buttonText({
+    x, y, z, text: `Sectors: ${debug_segments ? 'ON' : 'OFF'}`,
+  })) {
+    debug_segments = !debug_segments;
+  }
+  y += ui.button_height + 2;
+  if (do_ui && ui.buttonText({
+    x, y, z, text: `Connectivity: ${debug_lines ? 'ON' : 'OFF'}`,
+  })) {
+    debug_lines = !debug_lines;
+  }
+  y += ui.button_height + 2;
+  if (do_ui && ui.buttonText({
+    x, y, z, text: `Game Art: ${debug_caves ? 'ON' : 'OFF'}`,
+  })) {
+    debug_caves = !debug_caves;
+  }
+  y += ui.button_height + 2;
+
+  if (dt) {
+    v2set(debug_impulse, 0, 0);
+    debug_impulse[0] -= input.keyDown(KEYS.LEFT) + input.keyDown(KEYS.A) + input.padButtonDown(PAD.LEFT);
+    debug_impulse[0] += input.keyDown(KEYS.RIGHT) + input.keyDown(KEYS.D) + input.padButtonDown(PAD.RIGHT);
+    debug_impulse[1] -= input.keyDown(KEYS.UP) + input.keyDown(KEYS.W) + input.padButtonDown(PAD.UP);
+    debug_impulse[1] += input.keyDown(KEYS.DOWN) + input.keyDown(KEYS.S) + input.padButtonDown(PAD.DOWN);
+    if (input.keyDown(KEYS.SHIFT)) {
+      v2scale(debug_impulse, debug_impulse, 3);
+    }
+    v2addScale(origin, origin, debug_impulse, debug_zoom * 0.1);
+  }
+
+  if (do_ui) {
+    ui.print(null, x, y, Z.MAP + 10, 'WASD / Arrows - scroll map');
+    y += ui.font_height;
+    ui.print(null, x, y, Z.MAP + 10, 'SHIFT - scroll faster');
+    y += ui.font_height;
+    ui.print(null, x, y, Z.MAP + 10, '+/- - zoom in and out');
+    y += ui.font_height;
+  }
+
+  let wheel = input.mouseWheel();
+  if (input.keyDownEdge(KEYS.EQUALS) || wheel > 0) {
+    v2addScale(origin, origin, [game_width*debug_zoom*0.5, game_height*debug_zoom*0.5], 1);
+    debug_zoom /= 1.5;
+    v2addScale(origin, origin, [game_width*debug_zoom*0.5, game_height*debug_zoom*0.5], -1);
+  }
+  if (input.keyDownEdge(KEYS.MINUS) || wheel < 0) {
+    v2addScale(origin, origin, [game_width*debug_zoom*0.5, game_height*debug_zoom*0.5], 1);
+    debug_zoom *= 1.5;
+    v2addScale(origin, origin, [game_width*debug_zoom*0.5, game_height*debug_zoom*0.5], -1);
+  }
+
+
+  let debug_w = CAVE_W * SEG_SIZE;
+  let debug_h = CAVE_H * SEG_SIZE;
+  let debug_skewy = debug_h / 2;
+  let debug_draw_pad = 0;
+
+  let cam_x0 = camera2d.x0();
+  let cam_y0 = camera2d.y0();
+  let cam_w = camera2d.w();
+  let cam_h = camera2d.h();
+  let sx0 = floor((origin[0] + cam_x0*debug_zoom - debug_w) / debug_w) - debug_draw_pad;
+  let sx1 = floor((origin[0] + cam_w*debug_zoom + debug_w) / debug_w) + 1 + debug_draw_pad;
+
+  // ui.print(null, 100, 100, Z.MAP + 10, `o:${origin[0].toFixed(1)}; x:${sx0}-${sx1}`);
+
+  let ox = origin[0];
+  let oy = origin[1];
+  camera2d.setAspectFixed(game_width * debug_zoom, game_height * debug_zoom);
+  camera2d.set(camera2d.x0() + ox, camera2d.y0() + oy, camera2d.x1() + ox, camera2d.y1() + oy);
+
+  if (debug_lines || debug_segments) {
+    for (let sx = sx0; sx < sx1; ++sx) {
+      let screen_x = sx * debug_w;
+      let sy0 = floor((origin[1] + cam_y0*debug_zoom + sx * debug_skewy) / debug_h) - debug_draw_pad;
+      let sy1 = sy0 + floor(cam_h*debug_zoom / debug_h) + 3 + debug_draw_pad;
+      for (let sy = sy0; sy < sy1; ++sy) {
+        let screen_y = sy * debug_h - sx * debug_skewy;
+        this.drawDebugSub(sx,sy,
+          screen_x, screen_y);
+        // x0 + sx*hex_dx*SEG_SIZE*draw_debug_scale,
+        // y0 + (sy - skewy * sx)*SEG_SIZE*draw_debug_scale);
+      }
     }
   }
 };
@@ -513,11 +621,6 @@ Maze.prototype.completelyBlocked = function (tx, ty) {
   }
   return true;
 };
-const CAVE_SCALE = 2;
-const CAVE_W = 43 * CAVE_SCALE;
-const CAVE_H = 49 * CAVE_SCALE;
-const CAVE_SKEWY = floor(CAVE_H/2);
-const CAVE_COLOR = pico8.colors[5];
 const DRAW_PAD = 2; // Adding a bunch of extra just to get collision for AI
 Maze.prototype.getTierData = function (screen_x, screen_y) {
   let tx = floor(screen_x / CAVE_W);
@@ -529,13 +632,13 @@ Maze.prototype.getTierData = function (screen_x, screen_y) {
 Maze.prototype.draw = function () {
   let collision = this.collision = [];
   let tx0 = floor((origin[0] - CAVE_W) / CAVE_W) - DRAW_PAD;
-  let tx1 = floor((origin[0] + game_width + CAVE_W) / CAVE_W) + 1 + DRAW_PAD;
+  let tx1 = floor((origin[0] + game_width * debug_zoom + CAVE_W) / CAVE_W) + 1 + DRAW_PAD;
   let z = Z.BACKGROUND + 2;
 
   for (let tx = tx0; tx < tx1; ++tx) {
     let screen_x = tx * CAVE_W;
     let ty0 = floor((origin[1] + tx * CAVE_SKEWY) / CAVE_H) - DRAW_PAD;
-    let ty1 = ty0 + floor(game_height / CAVE_H) + 3 + DRAW_PAD;
+    let ty1 = ty0 + floor(game_height * debug_zoom / CAVE_H) + 3 + DRAW_PAD;
     for (let ty = ty0; ty < ty1; ++ty) {
       let screen_y = ty * CAVE_H - tx * CAVE_SKEWY;
       let bleft = 1 - this.connected(tx, ty, tx, ty+1);
@@ -801,11 +904,13 @@ Entity.prototype.impulseFromInput = function (dt) {
 
   this.impulse[0] = 0;
   this.impulse[1] = 0;
-  this.impulse[0] -= input.keyDown(KEYS.LEFT) + input.keyDown(KEYS.A) + input.padButtonDown(PAD.LEFT);
-  this.impulse[0] += input.keyDown(KEYS.RIGHT) + input.keyDown(KEYS.D) + input.padButtonDown(PAD.RIGHT);
-  this.impulse[1] -= input.keyDown(KEYS.UP) + input.keyDown(KEYS.W) + input.padButtonDown(PAD.UP);
-  this.impulse[1] += input.keyDown(KEYS.DOWN) + input.keyDown(KEYS.S) + input.padButtonDown(PAD.DOWN);
-  v2scale(this.impulse, this.impulse, 1/dt);
+  if (dt) {
+    this.impulse[0] -= input.keyDown(KEYS.LEFT) + input.keyDown(KEYS.A) + input.padButtonDown(PAD.LEFT);
+    this.impulse[0] += input.keyDown(KEYS.RIGHT) + input.keyDown(KEYS.D) + input.padButtonDown(PAD.RIGHT);
+    this.impulse[1] -= input.keyDown(KEYS.UP) + input.keyDown(KEYS.W) + input.padButtonDown(PAD.UP);
+    this.impulse[1] += input.keyDown(KEYS.DOWN) + input.keyDown(KEYS.S) + input.padButtonDown(PAD.DOWN);
+    v2scale(this.impulse, this.impulse, 1/dt);
+  }
   let lensq = v2lengthSq(this.impulse);
   if (lensq) {
     last_action_time = engine.global_timer;
@@ -1022,17 +1127,19 @@ Entity.prototype.update = (function () {
     }
 
     v2copy(start_pos, this.pos);
-    for (let ii = 0; ii < 2; ++ii) {
-      let max_dv = dt * this.accel[ii];
-      let imp = this.impulse[ii] * dt;
-      if (abs(imp) < 1) {
-        imp = 0;
+    if (dt) {
+      for (let ii = 0; ii < 2; ++ii) {
+        let max_dv = dt * this.accel[ii];
+        let imp = this.impulse[ii] * dt;
+        if (abs(imp) < 1) {
+          imp = 0;
+        }
+        let desired = imp/dt * this.speed[ii];
+        let delta = desired - this.vel[ii];
+        let dv = clamp(delta, -max_dv, max_dv);
+        this.vel[ii] += dv;
+        this.pos[ii] += this.vel[ii] * dt;
       }
-      let desired = imp/dt * this.speed[ii];
-      let delta = desired - this.vel[ii];
-      let dv = clamp(delta, -max_dv, max_dv);
-      this.vel[ii] += dv;
-      this.pos[ii] += this.vel[ii] * dt;
     }
 
     if (!colUnBlocked(this.pos)) {
@@ -1225,7 +1332,7 @@ function GameState() {
   this.paused = false;
 }
 let need_action_release = false;
-let did_action_button = String(document.location).indexOf('D=COMPO') !== -1;
+let did_action_button = engine.defines.COMPO;
 function actionDown() {
   let ret = input.keyDown(KEYS.SPACE) || input.keyDown(KEYS.E) || input.keyDown(KEYS.ENTER) ||
     input.padButtonDown(PAD.A);
@@ -1465,46 +1572,31 @@ GameState.prototype.addEnts = function (sx, sy, ents) {
   }
 };
 let num_ents = 0;
-perf.addMetric({
-  name: 'ents',
-  show_stat: 'show_fps', // always, if we're showing any metrics
-  labels: {
-    'ents: ': () => num_ents.toFixed(0),
-  },
-});
+// perf.addMetric({
+//   name: 'ents',
+//   show_stat: 'show_fps', // always, if we're showing any metrics
+//   labels: {
+//     'ents: ': () => num_ents.toFixed(0),
+//   },
+// });
 GameState.prototype.draw = function () {
   num_ents = 0;
-  for (let ii = 0; ii < this.entities.length; ++ii) {
-    let ent = this.entities[ii];
-    if (!ent.visible) {
-      continue;
-    }
-    ++num_ents;
-    let z = Z.SPRITES + ent.id * 0.1;
-    let param = {
-      x: floor(ent.pos[0]),
-      y: floor(ent.pos[1]),
-      w: ent.facing,
-      z,
-      frame: ent.head.getFrame(),
-      rot: ent.head_rot ? ent.facing === 1 ? ent.rot : ent.rot + PI : 0,
-    };
-    ent.sprite.draw(param);
-    if (ent.electric && ent.elec) {
-      param.frame = ent.elec.getFrame();
-      let zsave = param.z;
-      param.z = Z.ELEC;
-      ent.sprite.draw(param);
-      param.z = zsave;
-    }
-    for (let jj = 0; jj < ent.trail.length; ++jj) {
-      let tr = ent.trail[jj];
-      param.x = floor(tr.pos[0]);
-      param.y = floor(tr.pos[1]);
-      param.w = tr.facing;
-      param.z -= 0.01;
-      param.frame = ent[tr.type].getFrame();
-      param.rot = tr.facing === 1 ? tr.rot : tr.rot + PI;
+  if (!engine.defines.MAP) {
+    for (let ii = 0; ii < this.entities.length; ++ii) {
+      let ent = this.entities[ii];
+      if (!ent.visible) {
+        continue;
+      }
+      ++num_ents;
+      let z = Z.SPRITES + ent.id * 0.1;
+      let param = {
+        x: floor(ent.pos[0]),
+        y: floor(ent.pos[1]),
+        w: ent.facing,
+        z,
+        frame: ent.head.getFrame(),
+        rot: ent.head_rot ? ent.facing === 1 ? ent.rot : ent.rot + PI : 0,
+      };
       ent.sprite.draw(param);
       if (ent.electric && ent.elec) {
         param.frame = ent.elec.getFrame();
@@ -1512,6 +1604,23 @@ GameState.prototype.draw = function () {
         param.z = Z.ELEC;
         ent.sprite.draw(param);
         param.z = zsave;
+      }
+      for (let jj = 0; jj < ent.trail.length; ++jj) {
+        let tr = ent.trail[jj];
+        param.x = floor(tr.pos[0]);
+        param.y = floor(tr.pos[1]);
+        param.w = tr.facing;
+        param.z -= 0.01;
+        param.frame = ent[tr.type].getFrame();
+        param.rot = tr.facing === 1 ? tr.rot : tr.rot + PI;
+        ent.sprite.draw(param);
+        if (ent.electric && ent.elec) {
+          param.frame = ent.elec.getFrame();
+          let zsave = param.z;
+          param.z = Z.ELEC;
+          ent.sprite.draw(param);
+          param.z = zsave;
+        }
       }
     }
   }
@@ -1528,7 +1637,6 @@ GameState.prototype.draw = function () {
     }
   }
 
-  // this.maze.drawDebug();
   this.maze.draw();
   if (floaters.length) {
     last_action_time = engine.global_timer;
@@ -1543,7 +1651,7 @@ export function main() {
     pixely: PIXEL_STRICT ? 'strict' : 'on',
     viewport_postprocess: false,
     sound_manager: require('./glov/sound_manager.js').create(),
-    show_fps: false,
+    show_fps: Boolean(engine.DEBUG),
     ui_sprites: {
       button: ['ui/button', [4, 9, 4], [17]],
       button_down: ['ui/button_down', [4, 9, 4], [17]],
@@ -1883,6 +1991,9 @@ export function main() {
   const ORIGIN_PAD = 50;
   const ORIGIN_SHIFT_SPEED = PIXEL_STRICT ? 0.02 : 0.01;
   function shiftView(dt) {
+    if (!dt) {
+      return;
+    }
     let pos = state.player.pos;
     v2floor(fpos, pos);
     let max_shift = dt * ORIGIN_SHIFT_SPEED * (v2lengthSq(state.player.vel) < 0.00001 ? 2 : 1);
@@ -2103,6 +2214,9 @@ export function main() {
   let vis_param = vec4();
   shaders.addGlobal('vis_param', vis_param);
   function drawVis() {
+    if (engine.defines.MAP) {
+      return;
+    }
     let { pos, vis_pips } = state.player;
     let sprite = sprites.vis[vis_pips === 1 ? 50 : vis_pips === 2 ? 75 : 100];
     let x = (pos[0] | 0) - 256;
@@ -2142,6 +2256,17 @@ export function main() {
   }
 
   function gameplay(dt) {
+    if (engine.defines.MAP) {
+      camera2d.setAspectFixed(game_width, game_height);
+      state.maze.drawDebug(dt);
+      if (!debug_caves) {
+        return;
+      }
+      dt = 0;
+    } else {
+      debug_zoom = 1;
+    }
+
     state.update(dt);
     shiftView(dt);
     state.draw();
@@ -2158,20 +2283,22 @@ export function main() {
     if (state.levelup_active) {
       doLevelUp();
     }
-    if (!did_action_button && engine.global_timer > 20000) {
-      font.drawSizedAligned(style_status, game_width/2, game_height*2/3, Z.FLOATERS, ui.font_height,
-        font.ALIGN.HCENTER, 0, 0, 'Press SPACE or E to BITE');
+    if (!engine.defines.MAP) {
+      if (!did_action_button && engine.global_timer > 20000) {
+        font.drawSizedAligned(style_status, game_width/2, game_height*2/3, Z.FLOATERS, ui.font_height,
+          font.ALIGN.HCENTER, 0, 0, 'Press SPACE or E to BITE');
+      }
+      drawUI();
     }
-    drawUI();
     const bg_scale = 1/32;
     const origin_speed_scale = 0.75;
     sprites.game_bg.draw({
-      x: 0, y: 0, z: Z.BACKGROUND,
-      w: game_width,
-      h: game_height,
+      x: camera2d.x0Real(), y: camera2d.y0Real(), z: Z.BACKGROUND,
+      w: camera2d.wReal(),
+      h: camera2d.hReal(),
       uvs: vec4(origin_int[0]*bg_scale*origin_speed_scale,origin_int[1]*bg_scale*origin_speed_scale,
-        (origin_int[0]*origin_speed_scale + game_width)*bg_scale,
-        (origin_int[1]*origin_speed_scale + game_height)*bg_scale),
+        (origin_int[0]*origin_speed_scale + game_width * debug_zoom)*bg_scale,
+        (origin_int[1]*origin_speed_scale + game_height * debug_zoom)*bg_scale),
       //color: pico8.colors[1],
     });
   }
